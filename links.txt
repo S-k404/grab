@@ -1,0 +1,8 @@
+# Put one link per line, then run:   grab -f links.txt -j 8
+# Lines starting with # are ignored. Mix anything: videos, playlists, channels, posts, galleries, files.
+#
+# https://www.youtube.com/watch?v=VIDEO_ID
+# https://www.youtube.com/@SomeChannel/videos
+# https://x.com/user/status/1234567890
+# https://www.reddit.com/r/subreddit/comments/abc123/
+# https://example.com/stream/master.m3u8

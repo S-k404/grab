@@ -1,0 +1,30 @@
+[project]
+name = "grab"
+version = "1.0.0"
+description = "Fast batch downloader for videos, image posts and files (yt-dlp + gallery-dl + aria2c) with CLI and browser GUI"
+requires-python = ">=3.10"
+dependencies = [
+    "yt-dlp[default,curl-cffi]",
+    "gallery-dl",
+]
+
+[project.scripts]
+grab = "grab.cli:main"
+grab-gui = "grab.web:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["grab"]
+
+[tool.setuptools.package-data]
+grab = ["ui.html"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

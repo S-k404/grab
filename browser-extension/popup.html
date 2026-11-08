@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Grab Stream Catcher</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img src="icons/icon32.png" width="20" height="20" alt="">
+    <b>Grab</b>
+    <span class="spacer"></span>
+    <span id="conn" class="conn">checking…</span>
+  </header>
+
+  <section class="page">
+    <div class="ptitle" id="ptitle"></div>
+    <div class="psub" id="psub"></div>
+    <div class="btns">
+      <button id="sendPage" class="btn">Download this page</button>
+      <button id="scanBtn" class="btn secondary" title="Every picture and video on this page, to pick from">Everything on page</button>
+    </div>
+  </section>
+
+  <section id="everything" hidden>
+    <div class="ehead">
+      <button class="link" id="back">‹ Back</button>
+      <span id="ecount"></span>
+    </div>
+    <div class="filters">
+      <div class="seg" id="kind">
+        <button data-k="all" class="on">All</button><button data-k="image">Pictures</button><button data-k="video">Videos</button>
+      </div>
+      <select id="minSize" title="Hide small pictures (icons, avatars, buttons)">
+        <option value="0">Any size</option><option value="200" selected>200 px or bigger</option>
+        <option value="500">500 px or bigger</option><option value="1000">1000 px or bigger</option>
+      </select>
+    </div>
+    <div id="grid" class="grid"></div>
+    <div class="ebar">
+      <button class="link" id="selAll">Select all</button><button class="link" id="selNone">None</button>
+      <span class="spacer"></span>
+      <button class="btn" id="getSel">Download</button>
+    </div>
+  </section>
+
+  <section class="auto main">
+    <label class="sw"><input type="checkbox" id="autoSite"> <b>Auto-download videos on <span id="autoHost">this site</span></b></label>
+    <label class="sw sub"><input type="checkbox" id="autoAll"> On every site</label>
+    <div class="psub" id="autoInfo"></div>
+  </section>
+
+  <section class="main">
+    <div class="shead"><span id="listHead">Streams found on this page</span><button id="clear" class="link" hidden>Clear</button></div>
+    <div id="list"></div>
+  </section>
+
+  <section class="share main">
+    <label class="sw"><input type="checkbox" id="shareOn"> <b>Share my logins with Grab</b></label>
+    <div class="psub" id="shareInfo"></div>
+  </section>
+
+  <footer id="foot" class="main"></footer>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

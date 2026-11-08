@@ -1,0 +1,1213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grab</title>
+<style>
+:root {
+  --bg: #f5f6f8; --panel: #ffffff; --panel-2: #f0f2f5; --text: #15171c; --muted: #6a7280; --faint: #9aa1ac;
+  --line: #e2e5ea; --line-2: #d3d8df; --accent: #3b6ff5; --accent-soft: #e8eeff; --accent-text: #fff;
+  --ok: #19864a; --ok-soft: #e3f4ea; --warn: #a86a0c; --warn-soft: #fbf1df; --err: #cf3434; --err-soft: #fcebeb;
+  --skip: #0c7a84; --skip-soft: #e0f3f4; --bar: #e6e9ee; --input: #ffffff; --shadow: 0 1px 2px rgba(16,24,40,.05);
+  --radius: 10px; color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111317; --panel: #191c21; --panel-2: #20242a; --text: #e9ebee; --muted: #9aa2ad; --faint: #6c7480;
+    --line: #272b32; --line-2: #333842; --accent: #6b93ff; --accent-soft: #1f2a45; --accent-text: #0b0d12;
+    --ok: #4cc47f; --ok-soft: #16291f; --warn: #e3a743; --warn-soft: #2d2414; --err: #ff6f6f; --err-soft: #331a1b;
+    --skip: #45c6d0; --skip-soft: #132a2c; --bar: #2a2f37; --input: #14171b; --shadow: none; color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body { font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+button, input, select, textarea { font: inherit; color: inherit; }
+[hidden] { display: none !important; }
+svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+/* header */
+.top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 14px; padding: 10px 20px;
+  background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 15px; letter-spacing: -.01em; }
+.brand .logo { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, #5489ff, #6b40eb); display: grid; place-items: center; color: #fff; }
+body.app .brand { display: none; }
+.hstats { display: flex; gap: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.hstats b { color: var(--text); font-weight: 600; }
+.spacer { flex: 1; }
+
+/* buttons */
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line-2);
+  background: var(--panel); cursor: pointer; white-space: nowrap; box-shadow: var(--shadow); }
+.btn:hover { background: var(--panel-2); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.ghost { border-color: transparent; background: transparent; box-shadow: none; color: var(--muted); }
+.btn.ghost:hover { background: var(--panel-2); color: var(--text); }
+.btn.sm { height: 26px; padding: 0 9px; font-size: 12px; }
+.ibtn { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.ibtn:hover { background: var(--panel-2); color: var(--text); }
+.ibtn.danger:hover { color: var(--err); }
+kbd { font: 11px ui-monospace, Menlo, monospace; padding: 1px 4px; border: 1px solid var(--line-2); border-radius: 4px; color: var(--muted); }
+
+main { max-width: 1080px; margin: 0 auto; padding: 16px 20px 60px; display: grid; gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+
+/* banner */
+.banner { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius);
+  background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+.banner .txt { flex: 1; min-width: 0; }
+.banner .txt small { display: block; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* composer */
+.composer { padding: 12px; }
+.composer textarea { display: block; width: 100%; min-height: 66px; max-height: 260px; resize: vertical; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--input); padding: 9px 11px; font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; outline: none; }
+.composer textarea:focus, input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.composer textarea.drag { border-style: dashed; border-color: var(--accent); background: var(--accent-soft); }
+.crow { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.presets { display: flex; gap: 4px; flex-wrap: wrap; }
+.chip { height: 28px; padding: 0 11px; border-radius: 99px; border: 1px solid var(--line-2); background: var(--panel); cursor: pointer; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
+.chip:hover { color: var(--text); }
+.chip.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 55%, transparent); color: var(--accent); font-weight: 600; }
+.count { color: var(--muted); font-variant-numeric: tabular-nums; }
+.sub { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; color: var(--muted); font-size: 12px; }
+.sub .folder { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub select { height: 26px; border: 1px solid var(--line); border-radius: 7px; background: var(--input); padding: 0 6px; font-size: 12px; }
+.sep { width: 1px; height: 16px; background: var(--line-2); margin: 0 4px; }
+
+.adv { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 14px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.field { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.field input, .field select { height: 30px; border: 1px solid var(--line); border-radius: 7px; background: var(--input); padding: 0 8px; width: 100%; outline: none; }
+.field.wide { grid-column: span 2; }
+.check { display: flex; align-items: center; gap: 7px; font-size: 12.5px; cursor: pointer; }
+.check input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; flex: none; }
+.help { font-size: 11.5px; color: var(--faint); }
+
+/* list */
+.lhead { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.tabs { display: flex; gap: 2px; background: var(--panel-2); padding: 2px; border-radius: 8px; }
+.tab { height: 26px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.tab .n { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.tab.on { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.search { height: 28px; width: 190px; border: 1px solid var(--line); border-radius: 7px; background: var(--input); padding: 0 9px; outline: none; }
+.jobs { display: flex; flex-direction: column; }
+.job { display: grid; grid-template-columns: 88px minmax(0, 1fr) auto; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); align-items: center; }
+.job:last-child { border-bottom: 0; }
+.job:hover { background: color-mix(in srgb, var(--panel-2) 55%, transparent); }
+.job.child { padding-left: 40px; grid-template-columns: 72px minmax(0, 1fr) auto; }
+.thumb { width: 100%; aspect-ratio: 16/9; border-radius: 6px; background: var(--panel-2); overflow: hidden; display: grid; place-items: center; color: var(--faint); position: relative; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb svg.i { width: 22px; height: 22px; }
+.thumb .dur { position: absolute; right: 4px; bottom: 4px; background: rgba(0,0,0,.72); color: #fff; font-size: 10.5px; padding: 0 4px; border-radius: 4px; font-variant-numeric: tabular-nums; }
+.jt { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.title { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.title.url { font-weight: 450; color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.prog { display: flex; align-items: center; gap: 10px; margin-top: 7px; }
+.bar { flex: 1; height: 5px; border-radius: 99px; background: var(--bar); overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width .4s ease; }
+.bar.indet i { width: 35% !important; animation: slide 1.3s ease-in-out infinite; }
+.job.paused .bar i { background: var(--warn); }
+@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+.ptext { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 210px; text-align: right; }
+.err { margin-top: 5px; color: var(--err); font-size: 12px; display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.err span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.err .more { color: var(--muted); cursor: pointer; text-decoration: underline; flex: none; background: none; border: 0; padding: 0; font-size: 12px; }
+.tip { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.details { margin-top: 6px; padding: 8px 10px; background: var(--panel-2); border-radius: 7px; font: 11.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; color: var(--muted); }
+.side { display: flex; align-items: center; gap: 6px; }
+.status { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px; white-space: nowrap; }
+.st-running { background: var(--accent-soft); color: var(--accent); }
+.st-queued { background: var(--panel-2); color: var(--muted); }
+.st-paused, .st-cancelled { background: var(--warn-soft); color: var(--warn); }
+.st-done { background: var(--ok-soft); color: var(--ok); }
+.st-skipped { background: var(--skip-soft); color: var(--skip); }
+.st-error { background: var(--err-soft); color: var(--err); }
+.acts { display: flex; gap: 1px; }
+.fix { flex: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--skip); background: var(--skip-soft); padding: 0 6px; border-radius: 99px; margin-left: 6px; vertical-align: 1px; }
+.upill { font-size: 11.5px; color: var(--accent); background: var(--accent-soft); padding: 2px 9px; border-radius: 99px; white-space: nowrap; cursor: pointer; }
+.ustate { font-size: 12.5px; }
+.ustate.error { color: var(--err); }
+.field select.inline { width: auto; }
+.sched { display: grid; gap: 8px; }
+.sched input[type=time] { width: auto; min-width: 92px; height: 26px; border: 1px solid var(--line); border-radius: 6px; background: var(--input); padding: 0 4px; }
+.sched input[type=number] { height: 28px; border: 1px solid var(--line); border-radius: 6px; background: var(--input); padding: 0 6px; }
+.views { display: flex; gap: 2px; background: var(--panel-2); padding: 2px; border-radius: 8px; }
+.views button { height: 26px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-weight: 500; }
+.views button.on { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.views .n { font-size: 11px; color: var(--faint); margin-left: 4px; }
+.wadd { padding: 12px; border-bottom: 1px solid var(--line); display: grid; gap: 10px; }
+.wadd input[type=text] { height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--input); padding: 0 11px; width: 100%; outline: none; }
+.wopts { display: flex; gap: 10px 14px; flex-wrap: wrap; align-items: center; font-size: 12.5px; color: var(--muted); }
+.wopts select { height: 28px; border: 1px solid var(--line); border-radius: 7px; background: var(--input); padding: 0 6px; margin-left: 4px; }
+.src { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 12px; padding: 11px 12px; border-bottom: 1px solid var(--line); align-items: center; }
+.src:last-child { border-bottom: 0; }
+.src .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src .ul { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src .st { font-size: 12px; color: var(--muted); }
+.src .st b { font-weight: 600; color: var(--text); }
+.src.error .st { color: var(--err); }
+.src.off { opacity: .6; }
+.src .ctl { grid-row: 1 / span 3; grid-column: 2; display: flex; gap: 4px; align-items: center; }
+.src select { height: 26px; border: 1px solid var(--line); border-radius: 6px; background: var(--input); font-size: 12px; }
+.wtag { display: inline-flex; gap: 3px; align-items: center; font-size: 11px; color: var(--accent); background: var(--accent-soft); padding: 0 6px; border-radius: 99px; margin-left: 6px; flex: none; }
+.loginfix { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.loginfix button { height: 24px; padding: 0 9px; border-radius: 99px; border: 1px solid var(--line-2); background: var(--panel); color: var(--text); cursor: pointer; font-size: 12px; }
+.loginfix button:hover { border-color: var(--accent); color: var(--accent); }
+.loginfix .why { flex-basis: 100%; }
+.analyze { padding: 12px; display: grid; gap: 12px; }
+.an-head { display: grid; grid-template-columns: 128px minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+.an-head img, .an-head .ph { width: 128px; aspect-ratio: 16/9; object-fit: cover; border-radius: 7px; background: var(--panel-2); }
+.an-head .t { font-weight: 600; font-size: 14px; }
+.an-opts { display: grid; gap: 4px; }
+.an-opt { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-size: 13px; }
+.an-opt:hover { border-color: var(--line-2); }
+.an-opt:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.an-opt input { accent-color: var(--accent); margin: 0; }
+.an-opt .q { font-weight: 650; min-width: 64px; }
+.an-opt .d { color: var(--muted); flex: 1; }
+.an-opt .s { font-variant-numeric: tabular-nums; color: var(--text); }
+.an-opt .conv { font-size: 11px; color: var(--skip); background: var(--skip-soft); padding: 0 6px; border-radius: 99px; }
+.an-row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; font-size: 12.5px; color: var(--muted); }
+.an-row input[type=text], .an-row select, .adv .clipin input { height: 28px; border: 1px solid var(--line); border-radius: 7px; background: var(--input); padding: 0 8px; }
+.an-row input[type=text], .adv .clipin input { width: 82px; }
+.clipin { display: flex; align-items: center; gap: 6px; }
+.profilehint { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.learned { display: grid; gap: 4px; font-size: 12.5px; }
+.learned div { display: flex; justify-content: space-between; gap: 12px; padding: 5px 8px; background: var(--panel-2); border-radius: 6px; }
+.ibtn.closed svg { transform: rotate(-90deg); }
+.empty { padding: 42px 20px; text-align: center; color: var(--muted); }
+.empty h3 { margin: 0 0 6px; color: var(--text); font-size: 15px; font-weight: 600; }
+.empty p { margin: 4px 0; }
+
+/* settings dialog */
+dialog { border: 1px solid var(--line); border-radius: 14px; padding: 0; width: min(560px, calc(100vw - 32px)); background: var(--panel); color: var(--text); box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+dialog::backdrop { background: rgba(10,12,16,.45); }
+.dh { display: flex; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--line); font-weight: 650; font-size: 15px; }
+.db { padding: 16px 18px; display: grid; gap: 16px; max-height: 70vh; overflow: auto; }
+.db h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
+.row { display: flex; gap: 8px; align-items: center; }
+.row input[type=text] { flex: 1; height: 30px; border: 1px solid var(--line); border-radius: 7px; background: var(--input); padding: 0 8px; outline: none; }
+.bm { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px; background: var(--accent); color: var(--accent-text); text-decoration: none; font-weight: 600; cursor: grab; }
+.pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.pill { font-size: 11.5px; padding: 2px 9px; border-radius: 99px; border: 1px solid var(--line-2); color: var(--muted); }
+.pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.pill.no { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); }
+.toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(20px); opacity: 0; transition: .2s; background: var(--text); color: var(--bg);
+  padding: 8px 14px; border-radius: 9px; font-weight: 500; pointer-events: none; z-index: 20; max-width: calc(100vw - 32px); }
+.toast.show { opacity: 1; transform: translateX(-50%); }
+
+@media (max-width: 700px) {
+  .top { padding: 10px 16px; flex-wrap: wrap; } main { padding: 12px 16px 40px; }
+  .job, .job.child { grid-template-columns: 64px minmax(0, 1fr); padding-left: 12px; }
+  .side { grid-column: 1 / -1; justify-content: space-between; }
+  .ptext { min-width: 0; } .search { width: 100%; } .field.wide { grid-column: auto; }
+}
+
+/* ================= redesign ================= */
+.composer { padding: 14px; }
+.composer textarea { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; min-height: 54px; resize: none;
+  border-radius: 10px; padding: 12px 14px; overflow-y: auto; }
+.composer textarea::placeholder { color: var(--faint); }
+.cbar { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.seg { display: inline-flex; background: var(--panel-2); padding: 3px; border-radius: 9px; gap: 2px; }
+.seg button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--muted); cursor: pointer; font-weight: 500; }
+.seg button:hover { color: var(--text); }
+.seg button.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.14); font-weight: 600; }
+.seg button.on svg { color: var(--accent); }
+.kindopt { height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--input); padding: 0 8px; font-size: 13px; }
+.btn.big { height: 34px; padding: 0 16px; font-size: 13.5px; }
+.metarow { display: flex; align-items: center; gap: 2px; margin-top: 8px; }
+.chiplink { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; max-width: 44%; }
+.chiplink span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chiplink:hover { background: var(--panel-2); color: var(--text); }
+.chiplink svg { width: 14px; height: 14px; flex: none; }
+.adv { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.grp { display: grid; gap: 9px; align-content: start; padding: 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-2) 40%, transparent); }
+.grp.wide { grid-column: 1 / -1; }
+.grp h5 { margin: 0 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 650; }
+.grp .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.list .lhead { padding: 10px 14px; }
+.job { grid-template-columns: 120px minmax(0, 1fr) auto; padding: 12px 14px; gap: 14px; }
+.job.child { padding-left: 46px; grid-template-columns: 96px minmax(0, 1fr) auto; }
+.thumb { border-radius: 8px; }
+.title { font-size: 13.5px; }
+.prog .bar { height: 6px; }
+.acts { opacity: .55; transition: opacity .15s; }
+.job:hover .acts, .job:focus-within .acts { opacity: 1; }
+.tips { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; padding: 0 14px 16px; }
+.tip-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 4px; align-content: start; background: transparent;
+  text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.tip-card:hover { border-color: var(--line-2); background: color-mix(in srgb, var(--panel-2) 50%, transparent); }
+.tip-card b { color: var(--text); display: flex; gap: 7px; align-items: center; font-weight: 600; }
+.tip-card svg { color: var(--accent); }
+.tip-card span { font-size: 12px; color: var(--muted); }
+dialog#settings { width: min(800px, calc(100vw - 32px)); }
+.sbody { display: grid; grid-template-columns: 186px minmax(0, 1fr); height: min(560px, 76vh); }
+.snav { border-right: 1px solid var(--line); padding: 10px 8px; display: grid; align-content: start; gap: 2px;
+  background: color-mix(in srgb, var(--panel-2) 45%, transparent); }
+.snav button { display: flex; align-items: center; gap: 9px; height: 32px; padding: 0 10px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--muted); cursor: pointer; text-align: left; font-size: 13px; }
+.snav button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.snav button:hover:not(.on) { background: var(--panel-2); color: var(--text); }
+.sbody .db { max-height: none; overflow: auto; padding: 18px 22px; display: block; }
+.pane { display: grid; gap: 6px; align-content: start; }
+.pane h4 { margin: 0 0 4px; }
+.status-box { padding: 10px 12px; border-radius: 9px; background: var(--panel-2); font-size: 12.5px; }
+.steps { margin: 0 0 10px; padding-left: 18px; display: grid; gap: 4px; }
+.dropzone { position: fixed; inset: 10px; z-index: 30; border: 2px dashed var(--accent); border-radius: 16px;
+  background: color-mix(in srgb, var(--bg) 84%, transparent); display: grid; place-items: center; backdrop-filter: blur(4px); pointer-events: none; }
+.dropzone div { display: grid; justify-items: center; gap: 10px; color: var(--accent); font-size: 15px; }
+@media (max-width: 700px) {
+  .sbody { grid-template-columns: 1fr; height: auto; max-height: 80vh; }
+  .snav { grid-auto-flow: column; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .job, .job.child { grid-template-columns: 84px minmax(0, 1fr); }
+  .chiplink { max-width: 60%; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo"><svg class="i" viewBox="0 0 16 16" style="width:13px;height:13px;stroke-width:2.2"><path d="M8 2.5v8M4.5 7.5 8 11l3.5-3.5M3 13.5h10"/></svg></span>Grab</div>
+  <div class="views" id="views"><button data-v="dl" class="on">Downloads</button><button data-v="watch">Watching<span class="n" id="wCount"></span></button></div>
+  <div class="hstats" id="hstats"></div>
+  <span class="spacer"></span>
+  <span class="upill" id="capPill" hidden title="Total speed limit - change it in Settings"></span>
+  <span class="upill" id="waitPill" hidden title="Downloads wait for the download window - change it in Settings"></span>
+  <button class="btn ghost sm" id="startAllNow" hidden><svg class="i" viewBox="0 0 16 16"><path d="M5 3.5v9l7.5-4.5z"/></svg>Start now</button>
+  <span class="upill" id="upill" hidden title="Open Settings"></span>
+  <button class="btn ghost sm" id="pauseAll" hidden><svg class="i" viewBox="0 0 16 16"><path d="M6 4v8M10 4v8"/></svg>Pause all</button>
+  <button class="btn ghost sm" id="resumeAll" hidden><svg class="i" viewBox="0 0 16 16"><path d="M5 3.5v9l7.5-4.5z"/></svg>Resume all</button>
+  <button class="btn sm" id="openSettings" title="Settings (⌘,)"><svg class="i" viewBox="0 0 16 16"><path d="M2.5 5h6.5M12.5 5h1M2.5 11h1.5M7 11h6.5"/><circle cx="10.75" cy="5" r="1.6"/><circle cx="5.5" cy="11" r="1.6"/></svg>Settings</button>
+</header>
+
+<main>
+  <div class="banner" id="banner" hidden>
+    <svg class="i" viewBox="0 0 16 16"><rect x="4" y="2.5" width="8" height="11" rx="1.5"/><path d="M6.5 2.5v-.5h3v.5"/></svg>
+    <div class="txt"><b id="bannerTitle"></b><small id="bannerSub"></small></div>
+    <button class="btn sm primary" id="bannerGo">Download</button>
+    <button class="btn sm" id="bannerAdd">Add to box</button>
+    <button class="ibtn" id="bannerX" title="Dismiss"><svg class="i" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+  </div>
+
+  <section class="card composer" id="composer">
+    <textarea id="urls" rows="2" spellcheck="false" placeholder="Paste links: videos, playlists, channels, posts, galleries, streams or files. One per line."></textarea>
+    <div class="cbar">
+      <div class="seg" id="kindSeg" role="radiogroup" aria-label="What to download"></div>
+      <select id="kindOpt" class="kindopt" aria-label="Quality"></select>
+      <div id="presets" hidden></div>
+      <span class="spacer"></span>
+      <label class="check" id="nowBox" hidden title="Ignore the download window for these links"><input type="checkbox" id="startNow"> Start right away</label>
+      <span class="count" id="count"></span>
+      <button class="btn" id="analyzeBtn" title="See the qualities, sizes and options for this link before downloading">Analyze</button>
+      <button class="btn primary big" id="go" title="Download (⌘↵)"><svg class="i" viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7.5 8 11l3.5-3.5M3 13.5h10"/></svg>Download</button>
+    </div>
+    <div class="metarow">
+      <button class="chiplink" id="changeFolder" title="Where downloads are saved"><svg class="i" viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.4 1.5h5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/></svg><span id="folderLabel"></span></button>
+      <button class="chiplink" id="loginChip" title="Logins Grab uses for sites that need you signed in"><svg class="i" viewBox="0 0 16 16"><circle cx="5.5" cy="8" r="2.5"/><path d="M8 8h6M12 8v2.5M10 8v1.8"/></svg><span id="loginLabel">Logins</span></button>
+      <span class="spacer"></span>
+      <button class="chiplink" id="toggleAdv"><svg class="i" viewBox="0 0 16 16" style="width:13px;height:13px"><path d="M4 6l4 4 4-4"/></svg>More options</button>
+    </div>
+    <div class="profilehint" id="profileHint" hidden>
+      <svg class="i" viewBox="0 0 16 16" style="width:14px;height:14px"><circle cx="8" cy="5.5" r="2.5"/><path d="M3 13.5c.8-2.4 2.8-3.5 5-3.5s4.2 1.1 5 3.5"/></svg>
+      <span id="profileText"></span>
+      <button class="btn sm" id="watchInstead">Watch for new posts instead</button>
+    </div>
+    <div class="adv" id="adv" hidden>
+      <div class="grp">
+        <h5>Video</h5>
+        <label class="field">Format
+          <select id="compat" title="Compatible: H.264/HEVC MP4 that plays on every Apple device and in editors. Original: AV1/VP9, smaller files."><option value="true">Compatible (H.264/HEVC)</option><option value="false">Original (AV1/VP9, smaller)</option></select></label>
+        <label class="field">Container
+          <select id="container"><option value="mp4">MP4</option><option value="mkv">MKV</option><option value="webm">WebM</option></select></label>
+        <label class="field">Subtitles
+          <select id="sub_langs"><option value="">None</option><option value="en">English</option><option value="all">All languages</option></select></label>
+      </div>
+      <div class="grp">
+        <h5>Extras</h5>
+        <div class="field">Only part of the video
+          <span class="clipin"><input id="clipFrom" placeholder="from 0:00" spellcheck="false"> – <input id="clipTo" placeholder="to end" spellcheck="false"></span></div>
+        <label class="check"><input type="checkbox" id="sponsorblock"> Cut sponsor segments (YouTube)</label>
+        <label class="check"><input type="checkbox" id="chapters"> Keep chapters</label>
+        <label class="check"><input type="checkbox" id="thumbnail"> Embed cover image</label>
+      </div>
+      <div class="grp">
+        <h5>Playlists &amp; profiles</h5>
+        <label class="field">Only items <input id="items" placeholder="all, or e.g. 1-20"></label>
+        <label class="field">From profiles, get
+          <select id="media"><option value="all">Photos and videos</option><option value="images">Photos only</option><option value="videos">Videos only</option></select></label>
+        <label class="check"><input type="checkbox" id="expand_playlists"> Download in parallel</label>
+        <label class="check"><input type="checkbox" id="archive"> Skip what I already have</label>
+      </div>
+      <div class="grp">
+        <h5>Connection</h5>
+        <label class="field">Speed limit per download <input id="rate_limit" placeholder="none, or e.g. 5M"></label>
+        <div class="two">
+          <label class="field">Stream pieces at once <input id="fragments" type="number" min="1" max="64"></label>
+          <label class="field">Connections per file <input id="aria2_conns" type="number" min="1" max="16"></label>
+        </div>
+        <label class="check" title="If a download fails, Grab looks at why and retries with a fitting strategy, and remembers what worked per site."><input type="checkbox" id="smart"> Auto-fix failed downloads</label>
+        <label class="check"><input type="checkbox" id="aria2"> Multi-connection for files</label>
+        <label class="check"><input type="checkbox" id="aria2_streams"> …and for video streams</label>
+      </div>
+      <div class="grp wide">
+        <h5>Raw stream links</h5>
+        <label class="field">Page the stream played on (Referer), for .m3u8/.mp4 links copied from DevTools
+          <input id="referer" placeholder="https://page-the-video-was-on.com/…" spellcheck="false"></label>
+      </div>
+    </div>
+  </section>
+
+  <section class="card analyze" id="analyzePanel" hidden></section>
+
+  <section class="card list">
+    <div class="lhead">
+      <div class="tabs" id="tabs"></div>
+      <input class="search" id="q" type="search" placeholder="Search (⌘F)">
+      <span class="spacer"></span>
+      <button class="btn ghost sm" id="retryAll" hidden><svg class="i" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v3h-3"/></svg>Retry failed</button>
+      <button class="btn ghost sm" id="clear" hidden title="Take finished downloads off the list (failed ones stay)">Clear finished</button>
+      <button class="btn ghost sm" id="clearAll" hidden title="Take every finished and failed download off the list. Your files stay in the folder.">Clear all</button>
+      <button class="btn ghost sm" id="openDir"><svg class="i" viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.4 1.5h5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/></svg>Open folder</button>
+    </div>
+    <div class="jobs" id="jobs"></div>
+  </section>
+
+  <section class="card" id="watchView" hidden>
+    <div class="wadd">
+      <input type="text" id="wUrl" spellcheck="false" placeholder="Channel, playlist, subreddit or profile link: YouTube, Reddit, Instagram, X, Bluesky, TikTok…">
+      <div class="wopts">
+        <label>Check every <select id="wEvery"><option value="1">hour</option><option value="3">3 hours</option><option value="6" selected>6 hours</option><option value="12">12 hours</option><option value="24">day</option><option value="168">week</option></select></label>
+        <label>Start with <select id="wStart"><option value="new">only new posts from now on</option><option value="latest">the latest 10, then new ones</option><option value="all">everything (whole back catalogue)</option></select></label>
+        <label>Format <select id="wPreset"><option value="best">Best video</option><option value="1080">1080p</option><option value="720">720p</option><option value="mp3">MP3 audio</option><option value="m4a">M4A audio</option></select></label>
+        <label>Get <select id="wMedia"><option value="all">photos &amp; videos</option><option value="images">photos only</option><option value="videos">videos only</option></select></label>
+        <span class="spacer"></span>
+        <button class="btn primary" id="wAdd">Watch</button>
+      </div>
+      <div class="help" id="wHint">Grab checks each source by itself and downloads what's new. Checks wait for your download window and respect the speed limit.</div>
+    </div>
+    <div id="wList"></div>
+  </section>
+</main>
+
+<dialog id="settings">
+  <div class="dh">Settings<span class="spacer"></span><button class="ibtn" id="closeSettings" title="Close"><svg class="i" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg></button></div>
+  <div class="sbody">
+    <nav class="snav" id="snav">
+      <button data-tab="general" class="on"><svg class="i" viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.4 1.5h5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/></svg>General</button>
+      <button data-tab="speed"><svg class="i" viewBox="0 0 16 16"><path d="M2.5 11a5.5 5.5 0 1 1 11 0"/><path d="M8 11l2.5-3"/></svg>Speed &amp; schedule</button>
+      <button data-tab="logins"><svg class="i" viewBox="0 0 16 16"><circle cx="5.5" cy="8" r="2.5"/><path d="M8 8h6M12 8v2.5M10 8v1.8"/></svg>Logins</button>
+      <button data-tab="browser"><svg class="i" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c1.6 1.6 2.4 3.4 2.4 5.5S9.6 11.9 8 13.5M8 2.5C6.4 4.1 5.6 5.9 5.6 8s.8 3.9 2.4 5.5"/></svg>Browser</button>
+      <button data-tab="updates"><svg class="i" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v3h-3"/></svg>Updates</button>
+      <button data-tab="engine"><svg class="i" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="2"/><path d="M6 8h4M8 6v4"/></svg>Engine</button>
+    </nav>
+    <div class="db">
+      <section class="pane" data-pane="general">
+        <h4>Download folder</h4>
+        <div class="row"><input type="text" id="out_dir" spellcheck="false"><button class="btn sm" id="pick" hidden>Choose…</button></div>
+        <label class="field" style="margin-top:12px">Organise downloads
+          <select id="folders">
+            <option value="site">Sub-folder per site: Youtube/, Reddit/, Twitter/, kernel.org/ …</option>
+            <option value="none">No sub-folders: everything directly in this folder</option>
+          </select></label>
+        <div class="help">With sub-folders, playlists also get their own folder inside the site folder.</div>
+      </section>
+
+      <section class="pane" data-pane="speed" hidden>
+        <h4>Parallel downloads</h4>
+        <label class="field">Downloads at the same time: <b id="workersVal"></b>
+          <input id="workers" type="range" min="1" max="16" step="1" style="height:auto;padding:0;border:0;accent-color:var(--accent)"></label>
+        <div class="help">4–8 is a good range. If a site starts failing with “429 Too Many Requests”, lower it.</div>
+        <label class="check" style="margin-top:12px"><input type="checkbox" id="polite"> Polite mode for Instagram, X, TikTok, Facebook, Reddit &amp; Threads</label>
+        <div class="help">One download at a time per site, with short random pauses, so your account isn't flagged for automated activity. Other sites still download in parallel.</div>
+        <h4 style="margin-top:20px">Speed limit &amp; schedule</h4>
+        <div class="sched">
+          <label class="field">Total speed limit for all downloads
+            <span class="row"><input id="speed_limit" type="number" min="0" step="0.5" style="width:90px"> MB/s <span class="help">0 = no limit</span></span></label>
+          <label class="check"><input type="checkbox" id="limit_only_window"> Only limit between <input id="limit_start" type="time"> and <input id="limit_end" type="time"></label>
+          <div class="help">e.g. limit to 2 MB/s during the day so calls and streaming stay smooth, full speed at night.</div>
+          <label class="check" style="margin-top:6px"><input type="checkbox" id="window_on"> Only download between <input id="window_start" type="time"> and <input id="window_end" type="time"></label>
+          <label class="check"><input type="checkbox" id="pause_outside"> Pause running downloads when that window closes (they resume when it opens)</label>
+          <label class="check"><input type="checkbox" id="keep_awake"> Keep the Mac awake while there are downloads to do</label>
+          <div class="help">Links added outside the window wait for it; “Start now” overrides it. The Mac must be on and Grab open.</div>
+        </div>
+      </section>
+
+      <section class="pane" data-pane="logins" hidden>
+        <h4>Logins</h4>
+        <div class="status-box" id="sharedLogins"></div>
+        <label class="field" style="margin-top:12px">Use logins from
+          <select id="cookies_browser"></select></label>
+        <div class="help">“Brave extension (shared)” is the easiest: the Grab extension shares your logins for YouTube, Instagram, Reddit, X, TikTok, Facebook and Threads only, with no system permission needed. Other browsers can be read directly, but macOS may block that (then Grab tells you).</div>
+        <label class="field" style="margin-top:12px">Or a cookies.txt file <input id="cookies_file" placeholder="/path/to/cookies.txt" spellcheck="false"></label>
+      </section>
+
+      <section class="pane" data-pane="browser" hidden>
+        <h4>Stream Catcher extension</h4>
+        <p class="help" style="margin:0 0 8px">Spots the video streams a page plays (HLS, DASH, MP4) and sends them to Grab in one click. It also shares your logins. For Brave, Chrome, Helium and other Chromium browsers.</p>
+        <ol class="help steps">
+          <li>Open <b>brave://extensions</b> (Chrome: chrome://extensions) and turn on <b>Developer mode</b>.</li>
+          <li>Click <b>Load unpacked</b> and choose the extension folder: Documents → site-download → <b>browser-extension</b>.</li>
+          <li>Pin <b>Grab Stream Catcher</b> to the toolbar.</li>
+        </ol>
+        <div class="row"><button class="btn sm" id="showExt">Show extension folder</button><span class="help" id="extPath"></span></div>
+        <h4 style="margin-top:20px">Send to Grab button</h4>
+        <p class="help" style="margin:0 0 8px">Drag this to your bookmarks bar. On any page, click it to download that page straight away.</p>
+        <div class="row"><a class="bm" id="bookmarklet" href="#" onclick="return false"><svg class="i" viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7.5 8 11l3.5-3.5M3 13.5h10"/></svg>Send to Grab</a>
+          <button class="btn sm" id="copyBm">Copy code</button></div>
+        <p class="help" style="margin:8px 0 0">Can’t drag? Click <b>Copy code</b>, add a new bookmark and paste it into its <b>URL</b> field (not the address bar).</p>
+      </section>
+
+      <section class="pane" data-pane="updates" hidden>
+        <h4>Updates</h4>
+        <div class="status-box"><div class="ustate" id="ustate"></div><div class="help" id="uversions" style="margin-top:4px"></div></div>
+        <label class="check" style="margin-top:12px"><input type="checkbox" id="auto_update"> Keep yt-dlp and gallery-dl up to date automatically</label>
+        <div class="row" style="margin-top:10px">
+          <label class="field" style="display:flex;align-items:center;gap:6px">Channel
+            <select id="update_channel" class="inline"><option value="stable">Stable</option><option value="nightly">Nightly (fixes first)</option></select></label>
+          <span class="spacer"></span><button class="btn sm" id="checkNow">Check now</button>
+        </div>
+        <div class="help" style="margin-top:8px">Updates install only when nothing is downloading, then the engine restarts in a second or two. Downloads that failed because yt-dlp was out of date are retried automatically.</div>
+      </section>
+
+      <section class="pane" data-pane="engine" hidden>
+        <h4>Self-check</h4>
+        <div class="row"><button class="btn sm primary" id="doctor">Run self-check</button><span class="help" id="doctorNote"></span></div>
+        <div class="learned" id="doctorOut" style="margin-top:8px"></div>
+        <h4 style="margin-top:20px">Tools</h4>
+        <div class="pills" id="tools"></div>
+        <div class="help" id="version" style="margin-top:6px"></div>
+        <h4 style="margin-top:20px">Log</h4>
+        <div class="help" style="margin-bottom:8px">Grab writes what each download did, and why any failed, to a small log file (3 MB at most). On a failed download, <b>Copy details</b> copies everything needed to look into it, never your logins.</div>
+        <div class="row"><button class="btn sm" id="showLog">Show log file</button><span class="help" id="logPath"></span></div>
+        <h4 style="margin-top:20px">Auto-fix</h4>
+        <div class="help" style="margin-bottom:8px">When a download fails, Grab checks why and retries with a fitting strategy. What worked is tried first next time on that site.</div>
+        <div class="learned" id="learned"></div>
+        <div class="row" style="margin-top:8px"><button class="btn sm" id="forget" hidden>Forget learned fixes</button></div>
+      </section>
+    </div>
+  </div>
+</dialog>
+<div class="dropzone" id="dropzone" hidden><div><svg class="i" viewBox="0 0 16 16" style="width:34px;height:34px"><path d="M8 2.5v8M4.5 7.5 8 11l3.5-3.5M3 13.5h10"/></svg><b>Drop links or a .txt file</b></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const native = window.webkit?.messageHandlers?.grab;   // present inside Grab.app
+if (native) document.body.classList.add("app");
+
+const ICON = {
+  pause: '<path d="M6 4v8M10 4v8"/>', play: '<path d="M5 3.5v9l7.5-4.5z"/>',
+  open: '<path d="M9 3h4v4M13 3 7.5 8.5M11 9.5v3a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-7a.5.5 0 0 1 .5-.5h3"/>',
+  folder: '<path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.4 1.5h5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/>',
+  link: '<path d="M6.5 9.5l3-3M7 4.5l1-1a2.5 2.5 0 0 1 3.5 3.5l-1 1M9 11.5l-1 1A2.5 2.5 0 0 1 4.5 9l1-1"/>',
+  x: '<path d="M4 4l8 8M12 4l-8 8"/>', retry: '<path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v3h-3"/>',
+  chev: '<path d="M4 6l4 4 4-4"/>',
+  video: '<rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M6.5 6v4l3.5-2z"/>',
+  image: '<rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="5.5" cy="6.5" r="1"/><path d="M14 10.5l-3.5-3.5L4 13"/>',
+  audio: '<path d="M6 12V4l7-1.5v8"/><circle cx="4.5" cy="12" r="1.5"/><circle cx="11.5" cy="10.5" r="1.5"/>',
+  file: '<path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/>', list: '<path d="M5 4h8M5 8h8M5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"/>',
+};
+const icon = (n, size) => `<svg class="i" viewBox="0 0 16 16"${size ? ` style="width:${size}px;height:${size}px"` : ""}>${ICON[n]}</svg>`;
+
+const PRESETS = [
+  {id: "best", label: "Best video", o: {mode: "auto", quality: "best"}},
+  {id: "2160", label: "4K", o: {mode: "auto", quality: "2160"}},
+  {id: "1440", label: "1440p", o: {mode: "auto", quality: "1440"}},
+  {id: "480", label: "480p", o: {mode: "auto", quality: "480"}},
+  {id: "1080", label: "1080p", o: {mode: "auto", quality: "1080"}},
+  {id: "720", label: "720p", o: {mode: "auto", quality: "720"}},
+  {id: "mp3", label: "MP3 audio", o: {mode: "audio", audio_format: "mp3"}},
+  {id: "m4a", label: "M4A audio", o: {mode: "audio", audio_format: "m4a"}},
+  {id: "images", label: "Images", o: {mode: "images"}},
+  {id: "file", label: "Direct file", o: {mode: "direct"}},
+];
+const FIELDS = ["out_dir","cookies_browser","cookies_file","container","items","rate_limit","fragments","aria2_conns","referer",
+                "archive","expand_playlists","aria2","aria2_streams","smart","folders","media","compat","sub_langs","sponsorblock","chapters","thumbnail","polite","auto_update","update_channel",
+                "speed_limit","limit_only_window","limit_start","limit_end","window_on","window_start","window_end","pause_outside","keep_awake"];
+const STATUS = {running: "Downloading", queued: "Queued", paused: "Paused", done: "Done", skipped: "Already had", error: "Failed", cancelled: "Cancelled"};
+
+let cfg, prefs = {}, filter = "all", query = "", jobsCache = [];
+const prevStatus = new Map(), openDetails = new Set(), collapsed = new Set(), rows = new Map();
+
+const api = (path, body) => fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)}).then(r => r.json());
+const bytes = n => { if (!n && n !== 0) return ""; const u = ["B","KB","MB","GB","TB"]; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; } return (i ? n.toFixed(n < 10 ? 2 : 1) : n.toFixed(0)) + " " + u[i]; };
+const clock = s => { if (s == null) return ""; s = Math.round(s); const h = Math.floor(s/3600), m = Math.floor(s%3600/60), x = s%60; return (h ? h + ":" + String(m).padStart(2,"0") : m) + ":" + String(x).padStart(2,"0"); };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const linksIn = t => [...new Set((t.match(/\bhttps?:\/\/[^\s<>"'`]+/gi) || []).map(u => u.replace(/[),.;\]]+$/, "")))];
+const ago = t => { const s = Date.now() / 1000 - t; if (s < 60) return "just now"; if (s < 3600) return Math.floor(s/60) + " min ago"; if (s < 86400) return Math.floor(s/3600) + " h ago"; return new Date(t*1000).toLocaleDateString(); };
+
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2200); }
+
+// ---------- settings / prefs (saved by the server, so they survive restarts) ----------
+function fieldValues() {
+  const o = {};
+  for (const f of FIELDS) { const el = $("#" + f); o[f] = el.type === "checkbox" ? el.checked : el.type === "number" ? Number(el.value) : el.value.trim(); }
+  return o;
+}
+const clipSpec = () => { const a = $("#clipFrom").value.trim(), b = $("#clipTo").value.trim(); return a || b ? `${a || "0"}-${b}` : ""; };
+const readOpts = () => ({...fieldValues(), compat: $("#compat").value !== "false", clip: clipSpec(),
+                         ...(PRESETS.find(p => p.id === prefs.preset) || PRESETS[0]).o});
+let saveT;
+function savePrefs() {
+  prefs = {...prefs, ...fieldValues(), workers: Number($("#workers").value)};
+  showFolder();
+  clearTimeout(saveT); saveT = setTimeout(() => api("/api/prefs", {prefs}), 300);
+}
+function updateLoginChip(shared) {
+  if (shared) updateLoginChip.shared = shared;
+  const s = updateLoginChip.shared || {}, b = $("#cookies_browser").value;
+  const sites = s.sites || [];
+  $("#loginLabel").textContent = (b === "extension" || !b) && sites.length
+      ? `Logins: ${sites.slice(0, 3).join(", ")}${sites.length > 3 ? ` +${sites.length - 3}` : ""}`
+    : b === "extension" ? "Logins: open Brave to share them"
+    : b ? `Logins from ${b[0].toUpperCase() + b.slice(1)}` : "No logins";
+}
+$("#loginChip").onclick = () => openSettings("logins");
+function showFolder() { const f = $("#out_dir").value; $("#folderLabel").textContent = f.replace(/^\/Users\/[^/]+/, "~"); $("#folderLabel").title = f; }
+const KINDS = [
+  {id: "video", label: "Video", icon: "video", opts: [["best", "Best quality"], ["2160", "4K"], ["1440", "1440p"], ["1080", "1080p"], ["720", "720p"], ["480", "480p"]]},
+  {id: "audio", label: "Audio", icon: "audio", opts: [["mp3", "MP3"], ["m4a", "M4A (original quality)"]]},
+  {id: "images", label: "Images", icon: "image", opts: []},
+  {id: "file", label: "File", icon: "file", opts: []},
+];
+const presetKind = id => ["mp3", "m4a"].includes(id) ? "audio" : id === "images" ? "images" : id === "file" ? "file" : "video";
+function renderKinds() {
+  const k = presetKind(prefs.preset || "best"), kind = KINDS.find(x => x.id === k);
+  $("#kindSeg").innerHTML = KINDS.map(x => `<button data-kind="${x.id}" class="${x.id === k ? "on" : ""}" role="radio" aria-checked="${x.id === k}">${icon(x.icon, 14)}${x.label}</button>`).join("");
+  $("#kindOpt").hidden = !kind.opts.length;
+  $("#kindOpt").innerHTML = kind.opts.map(([v, l]) => `<option value="${v}" ${v === prefs.preset ? "selected" : ""}>${l}</option>`).join("");
+}
+$("#kindSeg").onclick = e => {
+  const b = e.target.closest("[data-kind]"); if (!b) return;
+  const kind = KINDS.find(x => x.id === b.dataset.kind);
+  prefs.preset = kind.opts.length ? (kind.opts.find(([v]) => v === prefs.preset)?.[0] || kind.opts[0][0]) : (kind.id === "images" ? "images" : "file");
+  renderKinds(); savePrefs();
+};
+$("#kindOpt").onchange = e => { prefs.preset = e.target.value; savePrefs(); };
+function renderPresets() {
+  renderKinds();
+  $("#presets").innerHTML = PRESETS.map(p => `<button class="chip ${prefs.preset === p.id ? "on" : ""}" data-p="${p.id}">${
+    icon(p.o.mode === "audio" ? "audio" : p.o.mode === "images" ? "image" : p.o.mode === "direct" ? "file" : "video", 13)}${p.label}</button>`).join("");
+}
+$("#presets").onclick = e => { const b = e.target.closest("[data-p]"); if (!b) return; prefs.preset = b.dataset.p; renderPresets(); savePrefs(); };
+
+async function init() {
+  cfg = await api("/api/config");
+  prefs = {preset: "best", ...cfg.prefs};
+  $("#version").textContent = `Grab ${cfg.version} · yt-dlp ${cfg.tools["yt-dlp"]}`;
+  $("#logPath").textContent = (cfg.log_file || "").replace(/^\/Users\/[^/]+/, "~");
+  $("#tools").innerHTML = [["yt-dlp", true], ["gallery-dl", cfg.tools["gallery-dl"]], ["aria2c", cfg.tools.aria2c], ["ffmpeg", cfg.tools.ffmpeg]]
+    .map(([t, ok]) => `<span class="pill ${ok ? "ok" : "no"}">${t} ${ok ? "✓" : "missing"}</span>`).join("");
+  $("#cookies_browser").innerHTML = cfg.browsers.map(b => `<option value="${b}">${
+    b === "extension" ? "Brave extension (shared)" : b ? b[0].toUpperCase() + b.slice(1) : "None"}</option>`).join("");
+  const vals = {auto_update: true, update_channel: "stable", speed_limit: 0, limit_only_window: false, limit_start: "09:00",
+                limit_end: "23:00", window_on: false, window_start: "01:00", window_end: "07:00", pause_outside: true,
+                keep_awake: true, ...cfg.defaults, workers: cfg.workers, ...prefs};
+  for (const k of ["compat"]) vals[k] = String(vals[k] ?? true);
+  for (const f of FIELDS) { const el = $("#" + f); if (el.type === "checkbox") el.checked = !!vals[f]; else el.value = vals[f] ?? ""; }
+  $("#workers").value = vals.workers; $("#workersVal").textContent = vals.workers;
+  renderPresets(); showFolder(); updateLoginChip(cfg.shared_logins);
+  $("#cookies_browser").addEventListener("change", () => updateLoginChip());
+  document.querySelectorAll("#adv input, #adv select, #settings input, #settings select, #cookies_browser").forEach(el => el.addEventListener("change", savePrefs));
+  $("#workers").addEventListener("input", () => $("#workersVal").textContent = $("#workers").value);
+  const code = native
+    ? `javascript:location.href='grab://add?key=${cfg.send_key}&url='+encodeURIComponent(location.href)`
+    : `javascript:void(window.open('http://127.0.0.1:${cfg.port}/add?key=${cfg.send_key}&url='+encodeURIComponent(location.href)))`;
+  $("#bookmarklet").href = code;
+  $("#copyBm").onclick = () => copy(code, "Bookmarklet code copied");
+  if (native) $("#pick").hidden = false;
+  $("#showExt").hidden = !cfg.extension_dir;
+  $("#extPath").textContent = cfg.extension_dir ? cfg.extension_dir.replace(/^\/Users\/[^/]+/, "~") : "Run ./build_app.sh --update-runtime to set it up";
+  $("#showExt").onclick = () => api("/api/open", {path: cfg.extension_dir});
+  handleHash();
+  updateAnalyzeBtn();
+  if (native) native.postMessage({action: "ready"});
+  tick(); setInterval(tick, 800);
+}
+
+// ---------- composer ----------
+const ta = $("#urls");
+function updateCount() { const n = linksIn(ta.value).length; $("#count").textContent = n ? `${n} link${n > 1 ? "s" : ""}` : ""; }
+ta.addEventListener("input", updateCount);
+ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); go(); } });
+ta.addEventListener("dragover", e => { e.preventDefault(); ta.classList.add("drag"); });
+ta.addEventListener("dragleave", () => ta.classList.remove("drag"));
+ta.addEventListener("drop", async e => {
+  ta.classList.remove("drag");
+  const files = [...e.dataTransfer.files];
+  const text = files.length ? (await Promise.all(files.map(f => f.text()))).join("\n") : (e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain"));
+  if (!text) return;
+  e.preventDefault(); appendLinks(text);
+});
+function autoGrow() { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight + 2, 240) + "px"; }
+ta.addEventListener("input", autoGrow);
+let dragDepth = 0;
+const hasLinks = e => [...(e.dataTransfer?.types || [])].some(t => t === "Files" || t === "text/uri-list" || t === "text/plain");
+window.addEventListener("dragenter", e => { if (view !== "dl" || !hasLinks(e)) return; dragDepth++; $("#dropzone").hidden = false; });
+window.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("#dropzone").hidden = true; } });
+window.addEventListener("dragover", e => { if (hasLinks(e)) e.preventDefault(); });
+window.addEventListener("drop", async e => {
+  dragDepth = 0; $("#dropzone").hidden = true;
+  if (e.target === ta || !hasLinks(e)) return;  // the box handles its own drops
+  e.preventDefault();
+  const files = [...e.dataTransfer.files];
+  const text = files.length ? (await Promise.all(files.map(f => f.text()))).join("\n") : (e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain"));
+  if (text) { appendLinks(text); autoGrow(); updateAnalyzeBtn(); updateProfileHint(); }
+});
+function appendLinks(text) { ta.value += (ta.value && !ta.value.endsWith("\n") ? "\n" : "") + text.trim() + "\n"; updateCount(); ta.focus(); }
+
+async function go(text, extra = {}) {
+  const urls = (text ?? ta.value).trim();
+  if (!urls) { toast("Paste at least one link first"); ta.focus(); return; }
+  savePrefs();
+  const r = await api("/api/add", {urls, options: {...readOpts(), ...extra}, now: !$("#nowBox").hidden && $("#startNow").checked});
+  if (!r.added) { toast("No valid links found"); return; }
+  if (text === undefined) { ta.value = ""; updateCount(); updateProfileHint(); autoGrow(); updateAnalyzeBtn(); $("#clipFrom").value = $("#clipTo").value = ""; }
+  toast(`Added ${r.added} download${r.added > 1 ? "s" : ""}`);
+  filter = "all"; tick();
+}
+$("#go").onclick = () => go();
+
+$("#toggleAdv").onclick = () => { const a = $("#adv"); a.hidden = !a.hidden; $("#toggleAdv").innerHTML = icon("chev", 13) + (a.hidden ? "More options" : "Fewer options"); };
+$("#changeFolder").onclick = () => native ? native.postMessage({action: "pickFolder", current: $("#out_dir").value}) : (openSettings(), $("#out_dir").focus());
+$("#pick").onclick = () => native.postMessage({action: "pickFolder", current: $("#out_dir").value});
+window.grabSetFolder = p => { $("#out_dir").value = p; savePrefs(); toast("Saving to " + p.replace(/^\/Users\/[^/]+/, "~")); };
+
+// ---------- banner: clipboard + links sent from the browser ----------
+let bannerLinks = null;   // null = clipboard hint whose text hasn't been read yet
+let bannerExtra = {};     // referer/title for a stream sent by the browser extension
+function showBanner(title, links, sub, extra) {
+  bannerLinks = links;
+  bannerExtra = extra || {};
+  $("#bannerTitle").textContent = title;
+  $("#bannerSub").textContent = sub || links.slice(0, 3).join("   ") + (links.length > 3 ? `   +${links.length - 3} more` : "");
+  $("#banner").hidden = false;
+}
+const newLinks = text => {
+  const known = new Set(jobsCache.map(j => j.url)), inBox = new Set(linksIn(ta.value));
+  return linksIn(text).filter(u => !known.has(u) && !inBox.has(u) && !/^https?:\/\/(127\.0\.0\.1|localhost)/.test(u));
+};
+function bannerAct(then) {
+  $("#banner").hidden = true;
+  if (bannerLinks === null) return native.postMessage({action: "readClipboard", then});
+  if (then === "go") return go(bannerLinks.join("\n"), bannerExtra);
+  if (bannerExtra.referer) $("#referer").value = bannerExtra.referer;  // keep it for when you press Download
+  appendLinks(bannerLinks.join("\n"));
+}
+$("#bannerX").onclick = () => $("#banner").hidden = true;
+$("#bannerAdd").onclick = () => bannerAct("add");
+$("#bannerGo").onclick = () => bannerAct("go");
+window.grabClipboardHint = () => !$("#banner").hidden ? null : showBanner("You copied a link", null, "Download it, or add it to the box to download with others.");
+window.grabClipboardResult = (text, then) => {
+  const links = newLinks(text);
+  if (!links.length) return toast(linksIn(text).length ? "Already in your list" : "No links on the clipboard");
+  then === "go" ? go(links.join("\n")) : appendLinks(links.join("\n"));
+};
+window.grabIncoming = (url, extra = {}) => {
+  const {key, ...opts} = extra;
+  if (key && key === cfg?.send_key) {  // from your own Send to Grab button / extension: just download
+    go(url, opts.referer ? opts : {});
+    toast("Downloading " + (opts.title || new URL(url).hostname));
+    return;
+  }
+  opts.referer ? showBanner(`Stream from ${opts.title || new URL(opts.referer).hostname}`, [url], url, opts)
+               : showBanner("Sent from your browser", [url]);
+};
+window.grabPasteAndGo = text => go(text);
+function handleHash() {
+  const added = location.hash.match(/^#added=(.*)$/);
+  if (added) { history.replaceState(null, "", "/"); toast("Downloading " + decodeURIComponent(added[1]).slice(0, 80)); return; }
+  const m = location.hash.match(/^#add=(.*)$/);
+  if (m) { const u = decodeURIComponent(m[1]); history.replaceState(null, "", "/"); if (u) window.grabIncoming(u); }
+}
+window.addEventListener("hashchange", handleHash);
+
+// ---------- header + list actions ----------
+const post = (path, body) => api(path, body).then(tick);
+$("#pauseAll").onclick = () => post("/api/pause", {});
+$("#resumeAll").onclick = () => post("/api/resume", {});
+$("#retryAll").onclick = () => Promise.all(jobsCache.filter(j => j.status === "error").map(j => api("/api/retry", {id: j.id}))).then(tick);
+async function clearList(all) {
+  const r = await api("/api/clear", {all});
+  if (r?.cleared) toast(`Cleared ${r.cleared} from the list. Your files are still in the folder.`);
+  tick();
+}
+$("#clear").onclick = () => clearList(false);
+$("#clearAll").onclick = () => clearList(true);
+$("#openDir").onclick = () => api("/api/open", {path: $("#out_dir").value});
+$("#q").addEventListener("input", e => { query = e.target.value.toLowerCase(); render(); });
+$("#tabs").onclick = e => { const b = e.target.closest("[data-f]"); if (b) { filter = b.dataset.f; render(); } };
+const FIXNAMES = {gentle: "fewer connections", client: "another YouTube player", aria2: "aria2c multi-connection",
+                  native: "built-in downloader", simple: "simpler format", "one-connection": "1 connection"};
+let learned = {};
+function renderLearned() {
+  const e = Object.entries(learned);
+  $("#learned").innerHTML = e.length
+    ? e.map(([site, how]) => `<div><span>${esc(site.replace(/^direct:/, ""))}</span><span style="color:var(--muted)">${esc(FIXNAMES[how] || how)}</span></div>`).join("")
+    : `<span class="help">Nothing learned yet. Sites that needed a fix will show up here.</span>`;
+  $("#forget").hidden = !e.length;
+}
+$("#forget").onclick = () => api("/api/forget", {}).then(() => { learned = {}; renderLearned(); toast("Forgot learned fixes"); });
+function showTab(tab) {
+  document.querySelectorAll("#snav [data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
+  document.querySelectorAll("#settings [data-pane]").forEach(p => p.hidden = p.dataset.pane !== tab);
+}
+$("#snav").onclick = e => { const b = e.target.closest("[data-tab]"); if (b) showTab(b.dataset.tab); };
+function openSettings(tab) {
+  showTab(typeof tab === "string" ? tab : "general");
+  renderLearned();
+  api("/api/config").then(c => {
+    const s = c.shared_logins || {};
+    updateLoginChip(s);
+    $("#sharedLogins").innerHTML = s.sites?.length
+      ? `✓ The Brave extension shares your logins for <b>${esc(s.sites.join(", "))}</b> (updated ${ago(s.updated)}). Grab uses them automatically.`
+      : "The Grab extension in Brave can share your logins for YouTube, Instagram, Reddit, X and a few others, with no system permission needed. Turn on “Share my logins with Grab” in its popup.";
+  });
+  $("#settings").showModal();
+}
+
+// ---------- analyze ----------
+const fmtDur = s => s == null ? "" : clock(s);
+function updateAnalyzeBtn() { $("#analyzeBtn").disabled = linksIn(ta.value).length !== 1; }
+ta.addEventListener("input", updateAnalyzeBtn);
+$("#analyzeBtn").onclick = () => analyzeLink();
+async function analyzeLink() {
+  const links = linksIn(ta.value);
+  if (links.length !== 1) return toast("Analyze works on one link at a time");
+  const url = links[0], panel = $("#analyzePanel");
+  panel.hidden = false;
+  panel.innerHTML = `<div class="help">Looking at ${esc(url)}…</div>`;
+  const r = await api("/api/analyze", {url});
+  const head = (sub) => `<div class="an-head">${r.thumbnail ? `<img src="${esc(r.thumbnail)}" referrerpolicy="no-referrer" alt="">` : `<div class="ph"></div>`}
+    <div style="min-width:0"><div class="t">${esc(r.title || url)}</div><div class="meta">${esc(sub)}</div></div>
+    <button class="ibtn" id="anClose" title="Close">${icon("x")}</button></div>`;
+  if (r.kind === "error") {
+    panel.innerHTML = `<div class="an-head"><div class="ph"></div><div><div class="t">Couldn't look at this link</div>
+      <div class="meta" style="white-space:normal;color:var(--err)">${esc(r.error)}</div>${r.tip ? `<div class="tip">${esc(r.tip)}</div>` : ""}</div>
+      <button class="ibtn" id="anClose">${icon("x")}</button></div>
+      ${r.needs_login ? loginFix($("#cookies_browser").value, "this site", 'data-anfix="1"') : ""}`;
+  } else if (r.kind === "profile" || r.kind === "playlist") {
+    const what = r.kind === "profile" ? `A whole profile on ${r.site}` : `${r.count || "?"} videos in this playlist/channel`;
+    panel.innerHTML = head(what + (r.uploader ? " · " + r.uploader : "")) +
+      (r.first?.length ? `<div class="help">Starts with: ${esc(r.first.join(" · "))}</div>` : "") +
+      `<div class="an-row"><button class="btn primary" id="anAll">Download all</button><button class="btn" id="anWatch">Watch for new posts instead</button>
+       <span>Tip: limit it with “Only items” under More options, e.g. 1-20.</span></div>`;
+    $("#anAll").onclick = () => { panel.hidden = true; go(); };
+    $("#anWatch").onclick = () => { panel.hidden = true; $("#watchInstead").hidden = false; setView("watch"); $("#wUrl").value = url; ta.value = ""; updateCount(); updateProfileHint(); };
+  } else {
+    const opts = r.options.map((o, i) => `<label class="an-opt"><input type="radio" name="anq" value="v:${o.height}" ${i === 0 ? "checked" : ""}>
+        <span class="q">${o.label}${o.fps > 30 ? o.fps : ""}</span>
+        <span class="d">${o.hdr ? "HDR · " : ""}${o.codec}${o.converts ? ` <span class="conv">→ HEVC for compatibility</span>` : ""}</span>
+        <span class="s">${o.size ? "~" + bytes(o.size) : ""}</span></label>`).join("") +
+      `<label class="an-opt"><input type="radio" name="anq" value="a:mp3"><span class="q">Audio</span><span class="d">MP3</span><span class="s">${r.audio_size ? "~" + bytes(r.audio_size) : ""}</span></label>
+       <label class="an-opt"><input type="radio" name="anq" value="a:m4a"><span class="q">Audio</span><span class="d">M4A (original quality, no re-encode)</span><span class="s">${r.audio_size ? "~" + bytes(r.audio_size) : ""}</span></label>`;
+    const subs = r.subtitles || [];
+    const subOpts = [`<option value="">No subtitles</option>`, (subs.some(s => s.startsWith("en")) || r.auto_subtitles) ? `<option value="en">English</option>` : "",
+      ...subs.filter(s => !s.startsWith("en")).slice(0, 25).map(s => `<option value="${esc(s)}">${esc(s)}</option>`),
+      subs.length > 1 ? `<option value="all">All (${subs.length})</option>` : ""].join("");
+    panel.innerHTML = head([r.uploader, fmtDur(r.duration), r.site, r.chapters ? r.chapters + " chapters" : "", r.is_live ? "LIVE" : ""].filter(Boolean).join(" · ")) +
+      `<div class="an-opts">${opts}</div>
+      <div class="an-row">Only part: <input type="text" id="anFrom" placeholder="from 0:00"> – <input type="text" id="anTo" placeholder="to ${fmtDur(r.duration) || "end"}">
+        <select id="anSubs">${subOpts}</select>
+        ${r.youtube ? `<label class="check"><input type="checkbox" id="anSB" ${$("#sponsorblock").checked ? "checked" : ""}> Cut sponsor segments</label>` : ""}
+        <label class="check"><input type="checkbox" id="anCh" ${$("#chapters").checked ? "checked" : ""}> Chapters</label>
+        <label class="check"><input type="checkbox" id="anTh" ${$("#thumbnail").checked ? "checked" : ""}> Cover image</label>
+        <span class="spacer"></span><button class="btn primary" id="anGo">Download</button></div>`;
+    $("#anGo").onclick = () => {
+      const [kind, val] = document.querySelector("input[name=anq]:checked").value.split(":");
+      const a = $("#anFrom").value.trim(), b = $("#anTo").value.trim();
+      const extra = {clip: a || b ? `${a || "0"}-${b}` : "", sub_langs: $("#anSubs").value, chapters: $("#anCh").checked,
+                     thumbnail: $("#anTh").checked, sponsorblock: $("#anSB") ? $("#anSB").checked : false};
+      Object.assign(extra, kind === "a" ? {mode: "audio", audio_format: val}
+        : {mode: "auto", quality: String(val) === String(r.options[0]?.height) ? "best" : String(val)});
+      panel.hidden = true; ta.value = ""; updateCount(); updateProfileHint(); updateAnalyzeBtn();
+      go(url, extra);
+    };
+  }
+  $("#anClose").onclick = () => panel.hidden = true;
+}
+// login buttons inside the Analyze panel: set that browser as Grab's login, then look again
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-anfix] [data-browser]"); if (!b) return;
+  e.stopPropagation(); e.preventDefault();
+  $("#cookies_browser").value = b.dataset.browser; savePrefs(); setTimeout(analyzeLink, 400);
+}, true);
+
+// ---------- "use your login from <browser>" quick fix ----------
+function loginFix(current, site, attr, problem) {
+  const browsers = (cfg.installed_browsers || []);
+  if (!browsers.length) return "";
+  const tried = current ? (browsers.find(b => b.id === current)?.name || current) : "";
+  const why = (problem ? problem
+    : tried ? `Still not logged in using ${tried}. Make sure you're logged in to ${site || "the site"} in that browser, or try another:`
+    : `This needs you logged in. Which browser are you logged in to ${site || "the site"} with?`
+  ) + (/reddit|^[ru]\//i.test(site || "") ? " (Reddit also blocks many VPN addresses. If you use one, try with it off.)" : "");
+  return `<div class="loginfix" ${attr}><span class="why">${esc(why)}</span>${browsers.map(b =>
+    `<button data-browser="${b.id}" title="Retry using your ${esc(b.name)} login">${b.id === current ? "Retry with " : "Use "}${esc(b.name)}</button>`).join("")}</div>`;
+}
+document.addEventListener("click", async e => {
+  const b = e.target.closest(".loginfix:not([data-anfix]) [data-browser]"); if (!b) return;
+  e.stopPropagation();
+  const box = b.closest(".loginfix"), browser = b.dataset.browser, name = b.textContent.replace(/^(Use|Retry with) /, "");
+  if (box.dataset.wfix) {
+    await api("/api/watch/update", {id: box.dataset.wfix, cookies_browser: browser});
+    if (!$("#cookies_browser").value) { $("#cookies_browser").value = browser; savePrefs(); }  // also Grab's default
+    await api("/api/watch/check", {id: box.dataset.wfix});
+    for (const j of jobsCache.filter(j => j.opts_watch === box.dataset.wfix && j.status === "error")) api("/api/remove", {id: j.id});
+  } else {
+    await api("/api/retry_login", {id: Number(box.dataset.fix), browser, default: true});
+  }
+  toast(`Retrying with your ${name} login. macOS may ask once to allow access.`);
+  tick();
+}, true);
+
+// ---------- watching ----------
+let watchNames = {}, view = "dl", lastWatchHtml = "";
+const WATCH_RE = [
+  /instagram\.com\/(?!p\/|reel|tv\/|explore)[^/?#]+\/?$/i, /reddit\.com\/(r|u|user)\/[^/]+\/?([a-z]+\/?)?$/i,
+  /(x|twitter)\.com\/(?!i\/|home|search)[^/]+\/?(media)?\/?$/i, /bsky\.app\/profile\/[^/]+\/?$/i,
+  /youtube\.com\/(@[^/]+|channel\/[^/]+|c\/[^/]+|user\/[^/]+)(\/(videos|shorts|streams))?\/?$/i, /youtube\.com\/playlist\?list=/i,
+  /tiktok\.com\/@[^/]+\/?$/i, /(tumblr\.com|pinterest\.|deviantart\.com|flickr\.com\/photos\/[^/]+\/?$)/i,
+];
+const isProfile = u => WATCH_RE.some(re => re.test(u.split("#")[0]));
+const agoOrIn = t => { const s = Math.round(t - Date.now() / 1000); const a = Math.abs(s);
+  const txt = a < 90 ? "a minute" : a < 3600 ? Math.round(a / 60) + " min" : a < 86400 * 2 ? Math.round(a / 3600) + " h" : Math.round(a / 86400) + " days";
+  return s >= 0 ? "in " + txt : txt + " ago"; };
+function setView(v) {
+  view = v;
+  document.querySelectorAll("#views button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
+  for (const el of document.querySelectorAll("main > section.card")) el.hidden = (el.id === "watchView") !== (v === "watch");
+  if (v === "watch") $("#wUrl").focus();
+}
+$("#views").onclick = e => { const b = e.target.closest("[data-v]"); if (b) setView(b.dataset.v); };
+function showWatch(list) {
+  watchNames = Object.fromEntries(list.map(s => [s.id, s.name]));
+  $("#wCount").textContent = list.length || "";
+  const html = list.length ? list.map(s => {
+    const off = !s.enabled, busy = s.state === "checking" || s.state === "setting up";
+    const st = busy ? `<b>${s.state === "checking" ? "Checking now…" : "Setting up…"}</b> ${esc(s.state === "setting up" ? s.last_result : "")}`
+      : `${s.last_check ? `Checked ${agoOrIn(s.last_check)}: <b title="${esc(s.last_result)}">${esc(s.needs_login ? "Needs you logged in" : s.cookie_problem ? "Couldn't read the browser's login" : s.last_result)}</b>` : esc(s.last_result || "Waiting for first check")}` +
+        (s.enabled && s.next_check ? ` · next ${agoOrIn(s.next_check)}` : off ? " · paused" : "");
+    const fmt = {best: "Best video", "1080": "1080p", "720": "720p", mp3: "MP3", m4a: "M4A"}[s.preset] || s.preset;
+    return `<div class="src ${s.state === "error" ? "error" : ""} ${off ? "off" : ""}" data-sid="${s.id}">
+      <div class="nm">${esc(s.name)}</div>
+      <div class="ul" title="${esc(s.url)}">${esc(s.url)}</div>
+      ${s.needs_login || s.cookie_problem ? loginFix(s.cookies_browser, s.name, `data-wfix="${s.id}"`, s.cookie_problem) : ""}
+      <div class="st">${st}${s.new_total ? ` · ${s.new_total} downloaded so far` : ""} · ${esc(fmt)}${s.media !== "all" ? ", " + (s.media === "images" ? "photos only" : "videos only") : ""}</div>
+      <div class="ctl">
+        <select data-every title="How often to check">${[1, 3, 6, 12, 24, 168].map(h => `<option value="${h}" ${+s.every_hours === h ? "selected" : ""}>${h === 168 ? "weekly" : h === 24 ? "daily" : "every " + h + " h"}</option>`).join("")}</select>
+        <button class="btn sm" data-wact="check" ${busy || off ? "disabled" : ""}>Check now</button>
+        <button class="btn sm" data-wact="toggle">${off ? "Resume" : "Pause"}</button>
+        <button class="ibtn danger" data-wact="remove" title="Stop watching (keeps downloaded files)">${icon("x")}</button>
+      </div></div>`;
+  }).join("") : `<div class="empty"><h3>Not watching anything yet</h3><p>Paste a channel, playlist, subreddit or profile above and press Watch.</p>
+     <p class="help">Instagram, X and private content need you logged in: choose your browser under “Logged-in cookies” on the Downloads page.</p></div>`;
+  if (html !== lastWatchHtml && !document.activeElement?.matches("#wList select")) { $("#wList").innerHTML = html; lastWatchHtml = html; }
+}
+$("#wAdd").onclick = async () => {
+  const url = $("#wUrl").value.trim();
+  if (!url) { toast("Paste a channel or profile link first"); return; }
+  const r = await api("/api/watch/add", {url, every_hours: +$("#wEvery").value, start: $("#wStart").value,
+    preset: $("#wPreset").value, media: $("#wMedia").value, latest: 10});
+  if (r.error) { toast(r.error); return; }
+  $("#wUrl").value = ""; toast(`Watching ${r.source.name}`); tick();
+};
+$("#wUrl").addEventListener("keydown", e => { if (e.key === "Enter") $("#wAdd").click(); });
+$("#wUrl").addEventListener("input", () => {
+  const u = $("#wUrl").value;
+  $("#wHint").textContent = /instagram\.com|(^|\/\/)(www\.)?(x|twitter)\.com/i.test(u)
+    ? "Instagram and X only show posts to logged-in users: choose your browser under “Logged-in cookies” on the Downloads page."
+    : "Grab checks each source by itself and downloads what's new. Checks wait for your download window and respect the speed limit.";
+});
+$("#wList").addEventListener("click", e => {
+  const b = e.target.closest("[data-wact]"); if (!b) return;
+  const id = b.closest("[data-sid]").dataset.sid, act = b.dataset.wact;
+  if (act === "check") api("/api/watch/check", {id}).then(tick);
+  if (act === "toggle") api("/api/watch/update", {id, enabled: b.textContent.trim() === "Resume"}).then(tick);
+  if (act === "remove" && confirm("Stop watching this? Files already downloaded are kept.")) api("/api/watch/remove", {id}).then(tick);
+});
+$("#wList").addEventListener("change", e => {
+  if (!e.target.matches("[data-every]")) return;
+  api("/api/watch/update", {id: e.target.closest("[data-sid]").dataset.sid, every_hours: +e.target.value}).then(() => { e.target.blur(); tick(); });
+});
+// paste a profile in the download box -> offer to watch it instead
+function updateProfileHint() {
+  const links = linksIn(ta.value), prof = links.filter(isProfile);
+  $("#profileHint").hidden = !prof.length;
+  if (prof.length) $("#profileText").textContent = prof.length === 1
+    ? "This is a whole channel/profile: Download gets all its posts (limit with “Only items” under More options)."
+    : `${prof.length} of these are whole channels/profiles.`;
+}
+ta.addEventListener("input", updateProfileHint);
+$("#watchInstead").onclick = () => {
+  const prof = linksIn(ta.value).filter(isProfile);
+  ta.value = linksIn(ta.value).filter(u => !isProfile(u)).join("\n"); updateCount(); updateProfileHint();
+  setView("watch"); $("#wUrl").value = prof[0] || ""; $("#wUrl").dispatchEvent(new Event("input"));
+  if (prof.length > 1) toast("Add the others one at a time: " + prof.slice(1).join(", "));
+};
+
+// ---------- schedule ----------
+let sched = {window_open: true};
+function showSchedule(s) {
+  sched = s;
+  $("#capPill").hidden = !s.cap;
+  if (s.cap) $("#capPill").textContent = `Limited to ${bytes(s.cap)}/s`;
+  const closed = s.window_on && !s.window_open;
+  $("#waitPill").hidden = !(closed && s.waiting);
+  if (closed) $("#waitPill").textContent = `${s.waiting} waiting for ${s.next_change}`;
+  $("#startAllNow").hidden = !(closed && s.waiting);
+  $("#nowBox").hidden = !closed;
+  $("#go").title = closed ? `Outside the download window (${s.window}) - downloads start at ${s.next_change}` : "";
+}
+$("#startAllNow").onclick = () => post("/api/start_now", {});
+$("#capPill").onclick = $("#waitPill").onclick = () => openSettings();
+
+// ---------- updates ----------
+let lastUpdateState = null;
+function showUpdate(u) {
+  const v = u.versions || {};
+  $("#uversions").textContent = `yt-dlp ${v["yt-dlp"] || "?"} · gallery-dl ${v["gallery-dl"] || "?"}` +
+    (u.last_check ? ` · checked ${ago(u.last_check)}` : "");
+  $("#ustate").textContent = u.message || (u.state === "idle" ? "Will check for updates shortly" : "");
+  $("#ustate").className = "ustate" + (u.state === "error" ? " error" : "");
+  const busy = {checking: "", waiting: "Update ready", installing: "Updating engine…", restarting: "Restarting engine…"}[u.state];
+  $("#upill").hidden = !busy; $("#upill").textContent = busy || "";
+  // after an update + restart, say what changed (once)
+  const lu = u.last_update;
+  if (lu && Date.now() / 1000 - lu.at < 600) {
+    let seen = ""; try { seen = localStorage.getItem("grab-seen-update") || ""; } catch {}
+    if (seen !== String(lu.at)) {
+      toast("Updated " + Object.entries(lu.packages).map(([p, [, n]]) => `${p} to ${n}`).join(", "));
+      try { localStorage.setItem("grab-seen-update", String(lu.at)); } catch {}
+    }
+  }
+  lastUpdateState = u.state;
+}
+$("#upill").onclick = openSettings;
+$("#showLog").onclick = () => api("/api/reveal_log", {});
+$("#doctor").onclick = async () => {
+  $("#doctor").disabled = true; $("#doctorNote").textContent = "Checking tools, versions and YouTube… (about 10 s)"; $("#doctorOut").innerHTML = "";
+  try {
+    const r = await api("/api/doctor", {out_dir: $("#out_dir").value});
+    $("#doctorOut").innerHTML = r.checks.map(c => `<div><span>${c.ok ? "✓" : "✗"} ${esc(c.name)}</span><span style="color:${c.ok ? "var(--muted)" : "var(--err)"};text-align:right">${esc(c.detail)}</span></div>`).join("");
+    const bad = r.checks.filter(c => !c.ok).length;
+    $("#doctorNote").textContent = bad ? `${bad} problem${bad > 1 ? "s" : ""} found` : "All good";
+  } catch { $("#doctorNote").textContent = "Self-check failed to run"; }
+  $("#doctor").disabled = false;
+};
+$("#checkNow").onclick = async () => {
+  prefs = {...prefs, ...fieldValues(), workers: Number($("#workers").value)};
+  await api("/api/prefs", {prefs});            // so the check uses the channel picked just now
+  await api("/api/update/check", {});
+  $("#ustate").textContent = "Checking…";
+};
+$("#openSettings").onclick = openSettings;
+$("#closeSettings").onclick = () => $("#settings").close();
+$("#settings").addEventListener("close", savePrefs);
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "f") { e.preventDefault(); $("#q").focus(); }
+  if ((e.metaKey || e.ctrlKey) && e.key === ",") { e.preventDefault(); openSettings(); }
+});
+function copy(text, msg) {
+  const fallback = () => { const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove(); };
+  (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).catch(fallback).finally(() => toast(msg || "Copied"));
+}
+function copyDetails(id) {
+  const text = () => fetch(`/api/details?id=${id}`).then(r => r.text());
+  const done = () => toast("Details copied. Paste them wherever you're asking for help.");
+  // a ClipboardItem that waits for the text keeps the click's permission to use the clipboard (WebKit needs that)
+  if (window.ClipboardItem && navigator.clipboard?.write) {
+    navigator.clipboard.write([new ClipboardItem({"text/plain": text().then(t => new Blob([t], {type: "text/plain"}))})])
+      .then(done, () => text().then(t => copy(t, "Details copied")));
+  } else text().then(t => copy(t, "Details copied"));
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-act]"); if (!b) return;
+  const id = Number(b.closest("[data-id]").dataset.id), j = jobsCache.find(x => x.id === id), act = b.dataset.act;
+  if (!j) return;
+  if (act === "details") { openDetails.has(id) ? openDetails.delete(id) : openDetails.add(id); render(); return; }
+  if (act === "collapse") { collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id); render(); return; }
+  if (act === "copy") return copy(j.url, "Link copied");
+  if (act === "copy_details") return copyDetails(id);
+  post("/api/" + act, {id});
+});
+
+// ---------- job list ----------
+const active = s => s === "running" || s === "queued" || s === "paused";
+const FILTERS = {all: () => true, active: j => active(j.status), done: j => j.status === "done" || j.status === "skipped", failed: j => j.status === "error" || j.status === "cancelled"};
+
+function shortError(err) {
+  const lines = (err || "").split("\n").filter(Boolean);
+  const tip = lines.find(l => l.startsWith("Tip:"));
+  const main = lines.find(l => !l.startsWith("Tip:")) || "";
+  return {main: main.replace(/^(yt-dlp|gallery-dl|aria2c):\s*/, "").replace(/^\[[^\]]+\]\s*[\w.-]*:\s*/, "").replace(/\s*\(caused by .*$/, ""),
+          tip: tip ? tip.slice(4).trim() : ""};
+}
+
+function kindIcon(j) {
+  if (j.children) return "list";
+  if (j.mode === "audio") return "audio";
+  if (j.tool === "gallery-dl" || j.mode === "images") return "image";
+  if (j.tool === "aria2c" || j.tool === "http" || j.mode === "direct") return "file";
+  return "video";
+}
+
+function rowHTML(j, kids) {
+  const st = j.status, run = st === "running";
+  const groupActive = !!j.children && kids.some(k => active(k.status));
+  let pct = j.progress, ptext = "";
+  if (j.children) {
+    const done = kids.filter(k => k.status === "done" || k.status === "skipped").length, failed = kids.filter(k => k.status === "error").length;
+    const inProg = kids.filter(k => active(k.status)).length;
+    pct = kids.length ? done * 100 / kids.length : 100;
+    ptext = `${done} of ${kids.length} done` + (failed ? ` · ${failed} failed` : "") + (inProg ? ` · ${inProg} left` : "");
+  } else if (run) {
+    ptext = [pct != null ? pct.toFixed(1) + "%" : "", j.total ? `${bytes(j.downloaded)} of ${bytes(j.total)}` : "",
+      j.speed ? bytes(j.speed) + "/s" : "", j.eta != null ? clock(j.eta) + " left" : ""].filter(Boolean).join(" · ") || j.stage;
+  } else if (st === "paused") ptext = j.stage || "Paused";
+  const showProg = run || st === "paused" || groupActive;
+  const meta = [j.site, j.uploader, j.children ? `${j.children} items` : "", !active(st) && j.size ? bytes(j.size) : "",
+    !active(st) && j.files.length > 1 ? `${j.files.length} files` : "", j.finished && !active(st) && !groupActive ? ago(j.finished) : ""]
+    .filter(Boolean).join(" · ");
+  const thumb = j.thumbnail ? (j.thumbnail.startsWith("/") ? `/api/thumb/${j.id}` : j.thumbnail) : "";
+  const stageLine = (run || st === "queued") && j.stage && !j.children ? `<div class="meta">${esc(j.stage)}${run && j.tool ? " · " + esc(j.tool) : ""}</div>` : "";
+  const e = st === "error" ? shortError(j.error) : null;
+
+  const acts = [];
+  if (j.children) acts.push(`<button class="ibtn ${collapsed.has(j.id) ? "closed" : ""}" data-act="collapse" title="${collapsed.has(j.id) ? "Show" : "Hide"} items">${icon("chev")}</button>`);
+  if (run) acts.push(`<button class="ibtn" data-act="pause" title="Pause">${icon("pause")}</button>`);
+  if (st === "queued") acts.push(`<button class="ibtn" data-act="pause" title="Hold">${icon("pause")}</button>`);
+  const waitsForWindow = sched.window_on && !sched.window_open && !j.force;
+  if (st === "queued" && waitsForWindow) acts.push(`<button class="ibtn" data-act="start_now" title="Start now (ignore the download window)">${icon("play")}</button>`);
+  if (st === "paused") acts.push(`<button class="ibtn" data-act="${waitsForWindow ? "start_now" : "resume"}" title="Resume">${icon("play")}</button>`);
+  if (st === "error" || st === "cancelled") acts.push(`<button class="ibtn" data-act="retry" title="Retry">${icon("retry")}</button>`);
+  if (j.files.length && !active(st)) {
+    acts.push(`<button class="ibtn" data-act="open" title="Open">${icon("open")}</button>`);
+    acts.push(`<button class="ibtn" data-act="reveal" title="Show in Finder">${icon("folder")}</button>`);
+  }
+  acts.push(`<button class="ibtn" data-act="copy" title="Copy link">${icon("link")}</button>`);
+  acts.push(`<button class="ibtn danger" data-act="${run ? "cancel" : "remove"}" title="${run ? "Cancel" : "Remove from list"}">${icon("x")}</button>`);
+  const label = run && pct != null ? `${Math.floor(pct)}%` : groupActive ? "Downloading"
+    : st === "queued" && j.stage.startsWith("waits for") ? "Scheduled" : STATUS[st];
+  const fallback = icon(kindIcon(j)).replace(/"/g, "&quot;");
+  return `
+    <div class="thumb">${thumb ? `<img src="${esc(thumb)}" loading="lazy" referrerpolicy="no-referrer" alt="" onerror="this.outerHTML='${fallback}'">` : icon(kindIcon(j))}
+      ${j.duration ? `<span class="dur">${clock(j.duration)}</span>` : ""}</div>
+    <div style="min-width:0">
+      <div class="jt"><span class="title ${j.has_title ? "" : "url"}" title="${esc(j.url)}">${esc(j.title)}</span>${j.opts_watch && watchNames[j.opts_watch] ? `<span class="wtag" title="Downloaded because you watch this">◉ ${esc(watchNames[j.opts_watch])}</span>` : ""}${j.strategy && !active(st) ? `<span class="fix" title="The first try failed; Grab switched to: ${esc(j.strategy)}">${icon("retry", 11)}auto-fixed: ${esc(j.strategy)}</span>` : ""}</div>
+      <div class="meta">${esc(meta)}</div>${stageLine}
+      ${showProg ? `<div class="prog"><div class="bar ${run && pct == null ? "indet" : ""}"><i style="width:${pct ?? 0}%"></i></div><span class="ptext">${esc(ptext)}</span></div>` : ""}
+      ${e ? `<div class="err"><span title="${esc(e.main)}">${esc(j.needs_login ? `Needs you logged in to ${j.site}` : e.main || "Failed")}</span><button class="more" data-act="details">${openDetails.has(j.id) ? "Hide details" : "Details"}</button><button class="more" data-act="copy_details" title="Copy everything needed to see why it failed (never your logins)">Copy details</button></div>${j.cookie_problem ? `<div class="tip">${esc(j.cookie_problem)}</div>` : e.tip && !j.needs_login ? `<div class="tip">${esc(e.tip)}</div>` : ""}` : ""}
+      ${j.needs_login ? loginFix(j.cookies_browser, j.site, j.opts_watch ? `data-wfix="${esc(j.opts_watch)}"` : `data-fix="${j.id}"`) : ""}
+      ${openDetails.has(j.id) ? `<div class="details">${esc([j.url, "", j.error, "", ...j.log].join("\n"))}</div>` : ""}
+    </div>
+    <div class="side"><span class="status st-${groupActive ? "running" : st}">${label}</span><div class="acts">${acts.join("")}</div></div>`;
+}
+
+function render() {
+  const jobs = jobsCache, byParent = new Map();
+  for (const j of jobs) if (j.parent) { if (!byParent.has(j.parent)) byParent.set(j.parent, []); byParent.get(j.parent).push(j); }
+  const ids = new Set(jobs.map(j => j.id));
+  const tops = jobs.filter(j => !j.parent || !ids.has(j.parent));
+  const kidsOf = j => byParent.get(j.id) || [];
+  const groupActive = j => active(j.status) || kidsOf(j).some(k => active(k.status));
+  const rank = j => j.status === "running" || kidsOf(j).some(k => k.status === "running") ? 0 : groupActive(j) ? 1 : 2;
+  tops.sort((a, b) => rank(a) - rank(b) || (rank(a) < 2 ? a.id - b.id : (b.finished || b.created) - (a.finished || a.created)));
+
+  const f = FILTERS[filter];
+  const matchQ = j => !query || [j.title, j.url, j.site, j.uploader].join(" ").toLowerCase().includes(query);
+  const out = [];
+  for (const t of tops) {
+    const kids = kidsOf(t).sort((a, b) => a.id - b.id);
+    const kidsShown = kids.filter(k => f(k) && matchQ(k));
+    const selfOk = t.children ? (filter === "all" && matchQ(t)) || kidsShown.length > 0 : f(t) && matchQ(t);
+    if (!selfOk) continue;
+    out.push([t, kids, false]);
+    if (!collapsed.has(t.id)) for (const k of kidsShown) out.push([k, [], true]);
+  }
+
+  // tabs + header
+  const c = s => jobs.filter(FILTERS[s]).length;
+  $("#tabs").innerHTML = [["all", "All"], ["active", "Active"], ["done", "Done"], ["failed", "Failed"]]
+    .map(([k, l]) => `<button class="tab ${filter === k ? "on" : ""}" data-f="${k}">${l}<span class="n">${(k === "all" ? jobs.filter(j => !j.children).length : c(k)) || ""}</span></button>`).join("");
+  const running = jobs.filter(j => j.status === "running"), queued = jobs.filter(j => j.status === "queued").length;
+  const speed = running.reduce((a, j) => a + (j.speed || 0), 0);
+  $("#hstats").innerHTML = running.length || queued
+    ? `<span><b>${bytes(speed) || "0 B"}/s</b></span><span><b>${running.length}</b> downloading</span>${queued ? `<span><b>${queued}</b> queued</span>` : ""}`
+    : jobs.length ? `<span>${c("done")} done${c("failed") ? ` · ${c("failed")} failed` : ""}</span>` : "";
+  $("#pauseAll").hidden = !(running.length || queued);
+  $("#resumeAll").hidden = !jobs.some(j => j.status === "paused");
+  $("#retryAll").hidden = !jobs.some(j => j.status === "error");
+  const finished = jobs.some(j => ["done", "skipped", "cancelled"].includes(j.status)), failed = jobs.some(j => j.status === "error");
+  $("#clearAll").hidden = !(finished || failed);
+  $("#clear").hidden = !(finished && failed);  // only when it would do something different from Clear all
+
+  const list = $("#jobs");
+  if (!out.length) {
+    rows.clear();
+    list.innerHTML = jobs.length
+      ? `<div class="empty"><p>Nothing ${query ? "matches your search" : "in this view"}.</p></div>`
+      : `<div class="empty"><h3>Ready when you are</h3><p>Paste links above and press Download (⌘↵), or drop links anywhere in this window.</p></div>
+         <div class="tips">
+           <button class="tip-card" onclick="$('#urls').focus()"><b>${icon("video")}Almost any site</b><span>YouTube, X, Reddit, Instagram, TikTok and ~1800 more, including whole playlists and channels.</span></button>
+           <button class="tip-card" onclick="$('#urls').focus()"><b>${icon("list")}Analyze first</b><span>Paste one link and press Analyze to pick a quality, see sizes, or get just a clip.</span></button>
+           <button class="tip-card" onclick="setView('watch')"><b>${icon("retry")}Watch for new posts</b><span>Channels, subreddits and profiles download new posts by themselves.</span></button>
+           <button class="tip-card" onclick="openSettings('browser')"><b>${icon("link")}From your browser</b><span>The Brave extension catches streams on any site and sends them here in one click.</span></button>
+         </div>`;
+    return;
+  }
+  if (list.querySelector(".empty")) list.innerHTML = "";
+  // keyed update: only rows whose content changed are rebuilt (keeps hover, images and scroll steady)
+  const seen = new Set();
+  let prev = null;
+  for (const [j, kids, child] of out) {
+    seen.add(j.id);
+    const html = rowHTML(j, kids);
+    let r = rows.get(j.id);
+    if (!r) { r = {el: document.createElement("div"), html: ""}; r.el.dataset.id = j.id; rows.set(j.id, r); }
+    r.el.className = `job ${j.status}${child ? " child" : ""}`;
+    if (r.html !== html) {
+      const img = r.el.querySelector(".thumb img");
+      r.el.innerHTML = html; r.html = html;
+      const nimg = r.el.querySelector(".thumb img");
+      if (img && nimg && img.src === nimg.src && img.complete && img.naturalWidth) nimg.replaceWith(img);
+    }
+    const want = prev ? prev.nextSibling : list.firstChild;
+    if (want !== r.el) list.insertBefore(r.el, want);
+    prev = r.el;
+  }
+  for (const [k, r] of rows) if (!seen.has(k)) { r.el.remove(); rows.delete(k); }
+}
+
+async function tick() {
+  let data; try { data = await api("/api/jobs"); } catch { return; }
+  jobsCache = data.jobs; learned = data.learned || {};
+  if (data.update) showUpdate(data.update);
+  if (data.schedule) showSchedule(data.schedule);
+  if (data.watch) showWatch(data.watch);
+  render();
+  if (native) {
+    const finished = [];
+    for (const j of jobsCache) {
+      const was = prevStatus.get(j.id);
+      if (was && was !== j.status && (was === "running" || was === "queued") && ["done", "error"].includes(j.status) && !j.children)
+        finished.push({title: j.title, status: j.status});
+      prevStatus.set(j.id, j.status);
+    }
+    native.postMessage({action: "status", active: jobsCache.filter(j => j.status === "running" || j.status === "queued").length,
+                        finishedNow: finished.length, finished});
+  }
+}
+
+init();
+</script>
+</body>
+</html>

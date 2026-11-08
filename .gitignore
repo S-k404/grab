@@ -1,0 +1,10 @@
+app/build/
+build/
+dist/
+.venv/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+Grab.app/
+.DS_Store
