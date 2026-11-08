@@ -1,3 +1,12 @@
+<!-- datasheet:banner -->
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/banner-dark.svg">
+    <img src=".github/assets/banner-light.svg" alt="grab: A batch downloader for videos, image posts and files, with a CLI, a browser GUI, a Mac app and a stream-catching extension." width="100%">
+  </picture>
+</p>
+<!-- /datasheet:banner -->
+
 # grab
 
 A batch downloader for videos, image posts and files, with a command-line tool and a browser GUI.
@@ -15,6 +24,17 @@ How it gets speed:
 - Playlists and channels are split into separate jobs, so their videos also download in parallel.
 - HLS/DASH fragments are fetched in parallel.
 - Direct files use aria2c with up to 16 connections each.
+
+<!-- datasheet:figure -->
+## At a glance
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/diagram-dark.svg">
+    <img src=".github/assets/diagram-light.svg" alt="Block diagram: paste a link, the right engine takes it" width="100%">
+  </picture>
+</p>
+<!-- /datasheet:figure -->
 
 ## Setup
 
@@ -240,3 +260,7 @@ If an online test fails, the site has probably changed. Run `grab --update` and 
 - **DRM streams** (Netflix, Prime Video, Disney+, Spotify…) are not supported.
 
 Only download content you have the right to download.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
