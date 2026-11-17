@@ -43,6 +43,22 @@ def test_h264_is_left_alone(site, out):
     assert v["codec_name"] == "h264" and not any("converted" in l for l in job.log)
 
 
+def test_h264_444_is_converted(site, out):
+    (job,) = run([f"{site}/files/h264_444.mp4"], out, archive=False)
+    assert job.status == "done", job.error
+    v, _ = probe(job.files[-1])
+    assert v["codec_name"] == "hevc" and v["codec_tag_string"] == "hvc1"
+    assert any("converted h264" in l for l in job.log)
+
+
+def test_hevc_hvc1_is_left_alone(site, out):
+    (job,) = run([f"{site}/files/hevc_hvc1.mp4"], out, archive=False)
+    assert job.status == "done", job.error
+    v, _ = probe(job.files[-1])
+    assert v["codec_name"] == "hevc" and v["codec_tag_string"] == "hvc1"
+    assert not any("converted" in l or "remuxed" in l for l in job.log)
+
+
 def test_original_format_when_compat_off(site, out):
     (job,) = run([f"{site}/files/vp9.webm"], out, archive=False, compat=False)
     v, _ = probe(job.files[-1])

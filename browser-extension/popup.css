@@ -36,6 +36,9 @@ section { padding: 10px 12px; }
 .item.drm { opacity: .6; }
 .item.drm .k::after { content: " · DRM-protected, can't be downloaded"; font-weight: 400; color: var(--err); }
 .empty { color: var(--muted); padding: 10px 2px; }
+#more { margin-top: 4px; }
+#more .note { color: var(--muted); font-size: 11.5px; padding: 4px 2px; }
+.item .why { grid-column: 1; color: var(--muted); font-size: 11.5px; font-style: italic; }
 .share { border-top: 1px solid var(--line); display: grid; gap: 4px; }
 .auto { border-bottom: 1px solid var(--line); display: grid; gap: 6px; }
 .sw.sub { color: var(--muted); font-size: 12px; }

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Grab Stream Catcher",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Finds the video and audio streams a page plays (HLS, DASH, MP4\u2026) and sends them to Grab to download.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAj9SIQ4/BPWpzHAAmm987hxYwIBL8DUqeQo3Kk/J4majvbSNiHGly6Wl0H9rIrr7FfclVCCXEO27DKk7FbTiPYCu3Qop8LXgfMtK2P7e1fsXON6g69Wr6FGFr1xp2/Yw7z0Nnhb9nVakxBUU/yua6zr4OmT2teM1ZgpJVKrMRq9jB8DbnRbH9YpWAKKLilrS7xhoGMRXtFETnEeODB4SOy2PCR2MhB5Mxa8VUHCqixg965EEJnnzAv6Sn7rkwUi6l4+wOY+RFgNYgZxWLGhvt4KizyrtJouDTK6ro7+0OAtYkspzkyH/oyvhyRPeN0U5AIDqOXSPpHnGUDcOvOLOHWwIDAQAB",
   "minimum_chrome_version": "116",
@@ -19,6 +19,12 @@
   "background": {
     "service_worker": "background.js",
     "type": "module"
+  },
+  "commands": {
+    "download-page": {
+      "suggested_key": { "default": "Alt+Shift+G" },
+      "description": "Download this page's video with Grab"
+    }
   },
   "action": {
     "default_popup": "popup.html",

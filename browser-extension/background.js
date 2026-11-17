@@ -3,8 +3,8 @@
 // found per tab, shows a count on the toolbar icon, and sends a chosen stream to Grab - or, on sites
 // where you turned auto-download on, every video the page plays.
 
-import { classify, parseHls, dashHasDrm, dashIsLive, label, loadsVideo, videoPage, siteOf, autoOn, autoWorthy, autoKey } from "./detect.js";
-import { scanPage, mergeScans } from "./scan.js";
+import { classify, explain, parseHls, dashHasDrm, dashIsLive, label, loadsVideo, videoPage, siteOf, autoOn, autoWorthy, autoKey } from "./detect.js";
+import { scanPage, scanStreams, mergeScans } from "./scan.js";
 
 const GRAB_PORTS = [8765, 8766, 8767, 8768, 8769, 8770];
 const MAX_ITEMS = 40;
@@ -36,6 +36,12 @@ function badge(tabId) {
   chrome.action.setBadgeBackgroundColor({ tabId, color: "#3b6ff5" }).catch(() => {});
 }
 
+// ✓ or ! on the toolbar icon for a moment, then back to the stream count
+function flash(tabId, ok) {
+  chrome.action.setBadgeText({ tabId, text: ok ? "✓" : "!" }).catch(() => {});
+  setTimeout(() => badge(tabId), 2500);
+}
+
 function tabState(tabId) {
   if (!tabs.has(tabId)) tabs.set(tabId, { page: "", title: "", items: [] });
   return tabs.get(tabId);
@@ -49,11 +55,14 @@ chrome.webRequest.onResponseStarted.addListener(
   ["responseHeaders"],
 );
 
+const MAX_OTHER = 40;
+
 async function onResponse(d) {
   if (d.tabId < 0) return;
   const hit = classify(d);
   const playing = loadsVideo(d);
-  if (!hit && !playing) return;
+  const why = hit ? null : explain(d);  // looked like media but wasn't offered: kept for "show everything the page loaded"
+  if (!hit && !playing && !why) return;
   await ready;
   const t = tabState(d.tabId);
   if (playing && !t.played) {  // the page is playing a video: on a video page that's what auto-download waits for
@@ -61,15 +70,31 @@ async function onResponse(d) {
     save(d.tabId);
     scheduleAuto(d.tabId);
   }
-  if (!hit) return;
+  if (!hit) {
+    if (why) noteOther(d.tabId, t, d.url, why);
+    return;
+  }
   if (t.items.some((i) => i.url === d.url)) return;
   if (t.items.some((i) => i.variants?.includes(d.url))) return;  // a quality level of a stream we already have
-  const item = { url: d.url, kind: hit.kind, manifest: hit.manifest, size: hit.size, audio: hit.audio, time: Date.now(), hidden: false };
+  const item = { url: d.url, kind: hit.kind, manifest: hit.manifest, size: hit.size, audio: hit.audio, direct: !!hit.direct, time: Date.now(), hidden: false };
   t.items.push(item);
   if (t.items.length > MAX_ITEMS) t.items.splice(0, t.items.length - MAX_ITEMS);
   save(d.tabId);
   if (hit.manifest) await inspectManifest(d.tabId, item);
   scheduleAuto(d.tabId);
+}
+
+// Requests that looked like media but weren't offered. Pieces of a stream are only counted (a long video has hundreds).
+function noteOther(tabId, t, url, why) {
+  if (why.why === "piece") {
+    t.pieces = (t.pieces || 0) + 1;
+    return;
+  }
+  t.other ||= [];
+  if (t.other.some((o) => o.url === url)) return;
+  t.other.push({ url, why: why.why, kind: why.kind, size: why.size, direct: !!why.direct, time: Date.now() });
+  if (t.other.length > MAX_OTHER) t.other.splice(0, t.other.length - MAX_OTHER);
+  save(tabId);
 }
 
 // Read HLS/DASH manifests: best resolution, duration, DRM, live, and hide the per-quality sub-playlists.
@@ -119,11 +144,13 @@ async function readManifest(tabId, item) {
 }
 
 // New page in the tab: forget what the old page played.
+const withoutHash = (u) => { try { const x = new URL(u); x.hash = ""; return x.href; } catch { return u; } };
 chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
   await ready;
   if (info.url) {
     const t = tabState(tabId);
-    if (t.page && t.page !== info.url) Object.assign(t, { items: [], played: false, autoSent: 0 });
+    // only a different page forgets what was found: "#t=30" or "#comments" is the same page, still playing the same video
+    if (t.page && withoutHash(t.page) !== withoutHash(info.url)) Object.assign(t, { items: [], other: [], pieces: 0, played: false, autoSent: 0 });
     t.page = info.url;
     save(tabId);
   }
@@ -236,21 +263,21 @@ async function findGrab(quiet = false) {
   return null;
 }
 
-async function addToGrab(port, { url, page, title, now, auto }) {
+async function addToGrab(port, { url, page, title, now, auto, direct }) {
   const r = await fetch(`http://127.0.0.1:${port}/api/ext/add`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, page, title, now: !!now, auto: !!auto, user_agent: navigator.userAgent }),
+    body: JSON.stringify({ url, page, title, now: !!now, auto: !!auto, direct: !!direct, user_agent: navigator.userAgent }),
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) return { ok: false, error: j.error || `Grab said ${r.status}` };
   return j.duplicate ? { ok: true, via: "grab", duplicate: true } : { ok: true, via: "grab" };
 }
 
-async function send({ url, page, title, now }) {
+async function send({ url, page, title, now, direct }) {
   const port = await findGrab();
   if (port) {
     await shareLogins(port).catch(() => {});
-    return addToGrab(port, { url, page, title, now });
+    return addToGrab(port, { url, page, title, now, direct });
   }
   // Grab isn't running: open it through its grab:// link (it starts and shows the link to confirm)
   const { grabKey } = await chrome.storage.local.get("grabKey");
@@ -296,7 +323,7 @@ async function autoCheck(tabId) {
   const vp = videoPage(t.page);
   const picks = vp
     ? (t.played ? [{ url: vp.url, page: vp.url, title: "" }] : [])   // Grab names it from the site itself
-    : visible(t).filter(autoWorthy).map((i) => ({ url: i.url, page: t.page, title: tab.title || t.title || "" }));
+    : visible(t).filter(autoWorthy).map((i) => ({ url: i.url, page: t.page, title: tab.title || t.title || "", direct: i.direct }));
   for (const pick of picks) {
     if ((t.autoSent || 0) >= AUTO_MAX_PER_PAGE) break;
     const r = await autoSend(pick);
@@ -374,6 +401,25 @@ async function setAuto({ tabId, page, site, all }) {
 
 // ---------------------------------------------------------------- everything on this page
 
+async function scanTabStreams(tabId) {
+  let frames;
+  try {
+    frames = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: scanStreams });
+  } catch {
+    return { items: [] };
+  }
+  const seen = new Set();
+  const items = [];
+  for (const f of frames) {
+    for (const s of f.result || []) {
+      if (!s?.url || seen.has(s.url)) continue;
+      seen.add(s.url);
+      items.push(s);
+    }
+  }
+  return { items };
+}
+
 async function scanTab(tabId) {
   let frames;
   try {
@@ -410,7 +456,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
       const t = tabs.get(msg.tabId);
       const items = visible(t).map((i) => ({ ...i, label: label(i) }))
         .sort((a, b) => (b.manifest - a.manifest) || ((b.maxHeight || 0) - (a.maxHeight || 0)) || ((b.size || 0) - (a.size || 0)));
-      return { items };
+      return { items, other: t?.other || [], pieces: t?.pieces || 0 };
     }
     if (msg.type === "status") {
       const port = await findGrab();
@@ -436,9 +482,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
       await stopSharing();
       return { sites: [] };
     }
-    if (msg.type === "clear") { tabs.set(msg.tabId, { ...tabState(msg.tabId), items: [] }); save(msg.tabId); return {}; }
+    if (msg.type === "clear") { tabs.set(msg.tabId, { ...tabState(msg.tabId), items: [], other: [], pieces: 0 }); save(msg.tabId); return {}; }
     if (msg.type === "auto") return autoStatus(msg.tabId, msg.page);
     if (msg.type === "scan") return scanTab(msg.tabId);
+    if (msg.type === "scanStreams") return scanTabStreams(msg.tabId);
     if (msg.type === "sendMany") return sendMany(msg);
     if (msg.type === "setAuto") return setAuto(msg);
     return {};
@@ -447,7 +494,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
 });
 
 // handles for the end-to-end test (tests/test_extension_e2e.py), harmless otherwise
-globalThis.grabCatcher = { tabs, send, findGrab, shareLogins, stopSharing, maybeConnect, setAuto, autoStatus, flushPending, scanTab, sendMany,
+globalThis.grabCatcher = { tabs, send, quickDownload, findGrab, shareLogins, stopSharing, maybeConnect, setAuto, autoStatus, flushPending, scanTab, sendMany,
                            resetThrottle: () => { lastAttempt = 0; lastShare = 0; } };
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -469,6 +516,17 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     url = best ? best.url : page;
   }
   const r = await send({ url, page, title: tab?.title || "" });
-  chrome.action.setBadgeText({ tabId: tab.id, text: r.ok ? "✓" : "!" }).catch(() => {});
-  setTimeout(() => badge(tab.id), 2500);
+  flash(tab.id, r.ok);
 });
+
+// One keystroke, same as "Download this page" in the popup (Alt+Shift+G; change it at chrome://extensions/shortcuts)
+async function quickDownload(tab) {
+  await ready;
+  tab ||= (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+  const page = tab?.url || "";
+  if (!page.startsWith("http")) return { ok: false, error: "only web pages can be downloaded" };
+  const r = await send({ url: page, page, title: tab.title || "" });
+  flash(tab.id, r.ok);
+  return r;
+}
+chrome.commands.onCommand.addListener((command, tab) => { if (command === "download-page") quickDownload(tab); });

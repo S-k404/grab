@@ -51,7 +51,11 @@ ask({ type: "status", page }).then((s) => {
 });
 
 async function render() {
-  const { items } = await ask({ type: "list", tabId: tab.id });
+  let { items, other = [], pieces = 0 } = await ask({ type: "list", tabId: tab.id });
+  if (!items.length && !vp && !knownSite && page.startsWith("http")) {
+    const dom = await ask({ type: "scanStreams", tabId: tab.id }).catch(() => ({ items: [] }));
+    items = dom?.items || [];
+  }
   $("#clear").hidden = !items.length;
   $("#listHead").textContent = vp && !items.length ? "Video on this page" : "Streams found on this page";
   if (!items.length && vp) {
@@ -80,14 +84,53 @@ async function render() {
       </div>`).join("");
     $("#list").onclick = (e) => {
       const go = e.target.closest("[data-go]"), cp = e.target.closest("[data-copy]");
-      if (go) sendIt(go, { url: items[Number(go.dataset.go)].url });
+      if (go) sendIt(go, { url: items[Number(go.dataset.go)].url, direct: items[Number(go.dataset.go)].direct });
       if (cp) navigator.clipboard.writeText(items[Number(cp.dataset.copy)].url).then(() => { cp.textContent = "Copied"; });
     };
   }
+  showOther(other, pieces);
   $("#foot").innerHTML = items.length
     ? "Tip: right-click any video, link or image → <b>Download with Grab</b>."
     : "Grab Stream Catcher watches pages for HLS, DASH and MP4 streams.";
 }
+// Everything the page loaded that looked like media but wasn't offered, each with the reason, for when the video you're
+// watching isn't in the list above. (Pieces of a stream are only counted: there are hundreds and none works alone.)
+const WHY = {
+  small: "Under 400 KB: usually a preview or a sound, but it may be your clip",
+  fetched: "Loaded in small parts by the page: may be a fragment, may be the whole video",
+};
+const mb = (n) => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(n < 10 << 20 ? 1 : 0)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+let others = [];
+function showOther(other, pieces) {
+  others = other;
+  $("#more").hidden = !other.length && !pieces;
+  const open = !$("#otherList").hidden;
+  const showBtn = $("#showAll");
+  showBtn.hidden = !other.length;
+  showBtn.textContent = open ? "Hide" : `Not seeing your video? Show everything else the page loaded (${other.length})`;
+  const note = pieces ? `<div class="note">The page also loaded ${pieces} piece${pieces === 1 ? "" : "s"} of streams. They don't work alone: use the stream in the list above, or <b>Download this page</b>.</div>` : "";
+  $("#otherList").innerHTML = other.map((o, n) => `
+    <div class="item other">
+      <div class="k">${esc(o.kind)}${o.size ? ` · ${mb(o.size)}` : ""}</div>
+      <div class="u" title="${esc(o.url)}">${esc(new URL(o.url).hostname)} · ${esc(new URL(o.url).pathname.split("/").pop() || "/")}</div>
+      <div class="why">${esc(WHY[o.why] || "")}</div>
+      <div class="acts">
+        <button data-ocopy="${n}" title="Copy link">Copy</button>
+        <button class="go" data-ogo="${n}">Download</button>
+      </div>
+    </div>`).join("") + note;
+  if (!other.length) $("#otherList").hidden = !pieces;  // only the note to show
+}
+$("#showAll").onclick = () => {
+  const list = $("#otherList");
+  list.hidden = !list.hidden;
+  $("#showAll").textContent = list.hidden ? `Not seeing your video? Show everything else the page loaded (${others.length})` : "Hide";
+};
+$("#otherList").onclick = (e) => {
+  const go = e.target.closest("[data-ogo]"), cp = e.target.closest("[data-ocopy]");
+  if (go) sendIt(go, { url: others[Number(go.dataset.ogo)].url, direct: others[Number(go.dataset.ogo)].direct });
+  if (cp) navigator.clipboard.writeText(others[Number(cp.dataset.ocopy)].url).then(() => { cp.textContent = "Copied"; });
+};
 $("#clear").onclick = async () => { await ask({ type: "clear", tabId: tab.id }); render(); };
 
 // everything on this page: every picture and video, to tick and download together

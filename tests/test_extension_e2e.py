@@ -129,6 +129,105 @@ def _try_targets(port):
         return False
 
 
+def test_keyboard_shortcut_sends_the_current_page(site, browser, grab_server):
+    dbg, sw_target = browser
+    grab_port, _ = grab_server
+    sw = CDP(sw_target["webSocketDebuggerUrl"])
+    sw.js(f"chrome.storage.local.set({{ports: [{grab_port}]}})")  # talk to the test Grab, not your real one
+    assert sw.js("grabCatcher.findGrab()") == grab_port
+
+    # the shortcut is registered (a user can move it at chrome://extensions/shortcuts)
+    command = sw.js("chrome.commands.getAll().then(cs => cs.find(c => c.name === 'download-page'))")
+    assert command and command["shortcut"] and "Grab" in command["description"]   # shown as ⌥⇧G on a Mac
+    assert sw.js("chrome.runtime.getManifest().commands['download-page'].suggested_key.default") == "Alt+Shift+G"
+
+    page_url = f"{site}/player.html"
+    with urllib.request.urlopen(f"http://127.0.0.1:{dbg}/json/version") as r:
+        b = CDP(json.load(r)["webSocketDebuggerUrl"])
+    b.call("Target.createTarget", url=page_url)
+    tab = _wait(lambda: sw.js(f"chrome.tabs.query({{}}).then(ts => ts.find(t => t.url === '{page_url}' && t.title))"), 15, "the page to load")
+
+    # what the keystroke runs: the page and its title go to Grab, and the icon confirms it
+    assert sw.js(f"grabCatcher.quickDownload({json.dumps(tab)})") == {"ok": True, "via": "grab"}
+    assert sw.js(f"chrome.action.getBadgeText({{tabId: {tab['id']}}})") == "✓"
+
+    def queued():
+        with urllib.request.urlopen(f"http://127.0.0.1:{grab_port}/api/jobs") as r:
+            return [j for j in json.load(r)["jobs"] if j["url"] == page_url]
+    _wait(lambda: len(queued()) == 1, 20, "Grab to receive the page")
+
+    # browser pages can't be downloaded: nothing is sent
+    r = sw.js("grabCatcher.quickDownload({id: 1, url: 'chrome://extensions', title: 'Extensions'})")
+    assert r["ok"] is False and len(queued()) == 1
+    for c in (b, sw):
+        c.close()
+
+
+def test_videos_that_used_to_slip_past_are_found(site, browser, grab_server):
+    dbg, sw_target = browser
+    grab_port, out = grab_server
+    sw = CDP(sw_target["webSocketDebuggerUrl"])
+    sw.js(f"chrome.storage.local.set({{ports: [{grab_port}]}})")  # talk to the test Grab, not your real one
+    assert sw.js("grabCatcher.findGrab()") == grab_port
+    with urllib.request.urlopen(f"http://127.0.0.1:{dbg}/json/version") as r:
+        b = CDP(json.load(r)["webSocketDebuggerUrl"])
+
+    def state(path):
+        tabs = json.loads(sw.js("JSON.stringify([...grabCatcher.tabs.entries()])"))
+        return next(({"id": i, **t} for i, t in tabs if t.get("page", "").startswith(f"{site}{path}")), None)
+
+    def open_page(path):
+        b.call("Target.createTarget", url=f"{site}{path}")
+        return _wait(lambda: state(path), 15, f"{path} to load")
+
+    # 1. a signed CDN link: no extension, and the server only says application/octet-stream
+    page = open_page("/octet.html")
+    found = _wait(lambda: [i for i in state("/octet.html")["items"] if not i["hidden"]], 20, "the unlabelled video to be found")
+    assert found[0]["kind"] == "Video" and found[0]["direct"] is True and found[0]["size"] > 10_000_000
+    assert sw.js(f"chrome.action.getBadgeText({{tabId: {page['id']}}})") == "1"
+    r = sw.js(f"grabCatcher.send({{url: {json.dumps(found[0]['url'])}, page: {json.dumps(site + '/octet.html')}, "
+              f"title: 'Octet page', direct: {json.dumps(found[0]['direct'])}}})")
+    assert r == {"ok": True, "via": "grab"}, r
+
+    def jobs():
+        with urllib.request.urlopen(f"http://127.0.0.1:{grab_port}/api/jobs") as r:
+            js = json.load(r)["jobs"]
+        return js if js and all(j["status"] in ("done", "error", "skipped") for j in js) else None
+    (job,) = _wait(jobs, 60, "Grab to download it")
+    assert job["status"] == "done", (job["error"], job["log"])
+    f = Path(job["files"][-1])
+    assert f.name == "Octet page.mp4" and duration(f) > 5          # named by the page, and by what the file turned out to be
+
+    # 2. a whole video that happens to be called part1.mp4 is not "a piece of a stream"
+    open_page("/parts.html")
+    found = _wait(lambda: [i for i in state("/parts.html")["items"] if not i["hidden"]], 20, "video_part1.mp4 to be found")
+    assert found[0]["kind"] == "MP4" and found[0]["url"].endswith("/parts/video_part1.mp4") and "direct" in found[0] and not found[0]["direct"]
+
+    # 3. the page rewrites its #hash while playing: that's still the same page, so what was found stays
+    open_page("/hash.html")
+    _wait(lambda: state("/hash.html")["items"], 20, "the video on the hash page")
+    _wait(lambda: state("/hash.html")["page"].endswith("#t=5"), 20, "the page to change its #hash")
+    assert [i["url"].split("/")[-1] for i in state("/hash.html")["items"]] == ["clip.mp4"]
+
+    # 4. only a tiny preview and stream pieces: not offered, but "show everything" lists them, with the reason
+    pre = open_page("/previews.html")
+    _wait(lambda: state("/previews.html").get("other") and state("/previews.html").get("pieces"), 20, "the near-misses to be noted")
+    assert not [i for i in state("/previews.html")["items"] if not i["hidden"]]
+    popup = b.call("Target.createTarget", url=f"chrome-extension://{EXT_ID}/popup.html?tab={pre['id']}")["targetId"]
+    pt = _wait(lambda: next((t for t in _targets(dbg) if t["id"] == popup), None), 10, "popup")
+    pc = CDP(pt["webSocketDebuggerUrl"])
+    _wait(lambda: pc.js("!!document.querySelector('#more') && !document.querySelector('#more').hidden"), 10, "the 'show everything' link")
+    assert "(1)" in pc.js("document.querySelector('#showAll').textContent")
+    assert pc.js("document.querySelector('#otherList').hidden")                       # closed until asked for
+    pc.js("document.querySelector('#showAll').click()")
+    assert pc.js("document.querySelectorAll('#otherList .item').length") == 1
+    assert "Under 400 KB" in pc.js("document.querySelector('#otherList .why').textContent")
+    assert "tiny-preview.mp4" in pc.js("document.querySelector('#otherList .u').textContent")
+    assert "1 piece of streams" in pc.js("document.querySelector('#otherList .note').textContent")
+    for c in (pc, b, sw):
+        c.close()
+
+
 def test_extension_finds_streams_and_grab_downloads_them(site, browser, grab_server, tmp_path):
     dbg, sw_target = browser
     grab_port, out = grab_server
@@ -168,7 +267,7 @@ def test_extension_finds_streams_and_grab_downloads_them(site, browser, grab_ser
     popup = b.call("Target.createTarget", url=f"chrome-extension://{EXT_ID}/popup.html?tab={tab_id}")["targetId"]
     pt = _wait(lambda: next((t for t in _targets(dbg) if t["id"] == popup), None), 10, "popup")
     pc = CDP(pt["webSocketDebuggerUrl"])
-    _wait(lambda: pc.js("document.querySelectorAll('.item').length") == 2, 10, "popup to list 2 streams")
+    _wait(lambda: pc.js("document.querySelectorAll('#list .item').length") == 2, 10, "popup to list 2 streams")
     assert "connected" in pc.js("document.querySelector('#conn').textContent")
     assert "My Test Video Page" in pc.js("document.querySelector('#ptitle').textContent")
     import base64
@@ -311,7 +410,8 @@ def test_everything_on_the_page(site, browser, grab_server, tmp_path):
     jobs = _wait(finished, 60, "Grab to download them")
     (group,) = [j for j in jobs if not j["parent"]]
     assert group["title"] == "8 files from Holiday Photos" and group["children"] == 8
-    assert all(j["status"] == "done" for j in jobs if j["parent"]), [(j["url"], j["error"]) for j in jobs]
+    assert all(j["status"] == "done" for j in jobs if j["parent"]), [
+        (j["url"], j["status"], j["error"]) for j in jobs if j["parent"] and j["status"] != "done"]
     folder = out / "127.0.0.1" / "Holiday Photos"
     assert {f.name for f in folder.iterdir()} == {"big.png", "wide.jpg", "lazy.jpg", "large.jpg", "image.jpg", "image (2).jpg",
                                                   "noext.png", "ep1.mp4"}

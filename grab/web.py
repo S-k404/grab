@@ -40,7 +40,12 @@ PRESETS = {
 
 
 def _supported_site(url: str) -> str | None:
-    """Name of the yt-dlp extractor for this page, if it's a known site (not the generic fallback)."""
+    """Name of the yt-dlp or built-in extractor for this page, if it's a known site."""
+    from .core import prefers_gallery, site_folder, unwrap_url
+    from .extract import is_threads_url, resolve_file_host
+    url = unwrap_url(url)
+    if is_threads_url(url):
+        return "Threads"
     from yt_dlp.extractor import gen_extractor_classes
     if not hasattr(_supported_site, "ies"):
         _supported_site.ies = [ie for ie in gen_extractor_classes() if ie.ie_key() != "Generic"]
@@ -50,6 +55,8 @@ def _supported_site(url: str) -> str | None:
                 return ie.ie_key().replace("Tab", "")
         except Exception:  # noqa: BLE001
             continue
+    if prefers_gallery(url) or resolve_file_host(url):
+        return site_folder(url)
     return None
 
 
@@ -254,6 +261,7 @@ class Handler(BaseHTTPRequestHandler):
             State.save_prefs(body.get("prefs") or {})
             if body.get("prefs", {}).get("workers"):
                 mgr.set_workers(body["prefs"]["workers"])
+            mgr.set_keep_history(body.get("prefs", {}).get("keep_history", True) is not False)
             State.scheduler.tick()  # apply new speed cap / download window right away
             return self._send(200, {"ok": True})
         if path == "/api/workers":
@@ -264,6 +272,20 @@ class Handler(BaseHTTPRequestHandler):
         if path in actions:
             actions[path](jid)
             return self._send(200, {"ok": True})
+        if path == "/api/move":  # {"id", "to": "top" | "bottom"}: where a waiting download stands in the line
+            return self._send(200, {"ok": mgr.move(jid, str(body.get("to") or ""))})
+        if path == "/api/export":  # {"which": "all" | "active" | "done" | "failed", "reveal": bool}: a .txt list in the download folder
+            which = body.get("which") if body.get("which") in ("all", "active", "done", "failed") else "all"
+            rows = mgr.export_rows(which)
+            if not rows:
+                return self._send(200, {"count": 0})
+            folder = Path(State.base_options().out_dir)
+            folder.mkdir(parents=True, exist_ok=True)
+            target = folder / f"grab-links-{which}-{time.strftime('%Y%m%d-%H%M%S')}.txt"
+            target.write_text("".join(r["url"] + "\n" for r in rows), encoding="utf-8")
+            if body.get("reveal"):
+                _open(str(target), reveal=True)
+            return self._send(200, {"count": len(rows), "path": str(target)})
         if path == "/api/retry_login":
             # "Use your login from <browser>": retry this download with that browser's cookies
             job, browser = mgr.get(jid), str(body.get("browser") or "")
@@ -350,6 +372,11 @@ def _ext_add_impl(handler: Handler):
     prefs = State.prefs()
     opts = Options.from_dict({**State.defaults.to_dict(), **prefs, **PRESETS.get(prefs.get("preset", "best"), {})})
     opts.out_dir = str(Path(opts.out_dir or State.defaults.out_dir).expanduser())
+    if body.get("direct") and url != page:  # a plain video file the browser was playing: yt-dlp can't tell what it is
+        from .core import DIRECT_EXTS, _ext
+        opts.mode = "direct"
+        if _ext(url) not in DIRECT_EXTS:
+            opts.aria2 = False  # a single plain connection, so it's named by what the file turns out to be
     if url != page:  # a raw stream: it needs the page as Referer, and the page's title as its name
         opts.referer = page if page.startswith("http") else ""
         opts.title = str(body.get("title") or "")[:200]
@@ -417,7 +444,8 @@ def main(argv=None):
     start_log_file(sd / "logs" / "grab.log")
     log.info("engine %s started (yt-dlp %s)", __version__, tool_status()["yt-dlp"])
     workers = State.prefs().get("workers") or a.jobs
-    State.mgr = Manager(int(workers), state_file=str(sd / "history.json"))
+    State.mgr = Manager(int(workers), state_file=str(sd / "history.json"),
+                        keep_history=State.prefs().get("keep_history", True) is not False)
     State.defaults = Options(out_dir=str(Path(a.out).expanduser()))
 
     srv = None

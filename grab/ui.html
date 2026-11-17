@@ -306,6 +306,8 @@ dialog#settings { width: min(800px, calc(100vw - 32px)); }
       <span class="spacer"></span>
       <label class="check" id="nowBox" hidden title="Ignore the download window for these links"><input type="checkbox" id="startNow"> Start right away</label>
       <span class="count" id="count"></span>
+      <button class="btn ghost" id="importBtn" title="Add the links from a text file: one per line, or a list exported from Grab"><svg class="i" viewBox="0 0 16 16"><path d="M8 2.5V10M5 7.5l3 3 3-3M3 9v3.5A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5V9"/></svg>Import…</button>
+      <input type="file" id="importFile" accept=".txt,.list,.csv,.md,.html,text/*" multiple hidden>
       <button class="btn" id="analyzeBtn" title="See the qualities, sizes and options for this link before downloading">Analyze</button>
       <button class="btn primary big" id="go" title="Download (⌘↵)"><svg class="i" viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7.5 8 11l3.5-3.5M3 13.5h10"/></svg>Download</button>
     </div>
@@ -375,6 +377,7 @@ dialog#settings { width: min(800px, calc(100vw - 32px)); }
       <button class="btn ghost sm" id="retryAll" hidden><svg class="i" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v3h-3"/></svg>Retry failed</button>
       <button class="btn ghost sm" id="clear" hidden title="Take finished downloads off the list (failed ones stay)">Clear finished</button>
       <button class="btn ghost sm" id="clearAll" hidden title="Take every finished and failed download off the list. Your files stay in the folder.">Clear all</button>
+      <button class="btn ghost sm" id="exportLinks" hidden title="Save the links in this view as a text file in your download folder. Import it again later, or use it with grab -f"><svg class="i" viewBox="0 0 16 16"><path d="M8 10V2.5M5 5l3-3 3 3M3 9v3.5A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5V9"/></svg>Export links</button>
       <button class="btn ghost sm" id="openDir"><svg class="i" viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.4 1.5h5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/></svg>Open folder</button>
     </div>
     <div class="jobs" id="jobs"></div>
@@ -418,6 +421,9 @@ dialog#settings { width: min(800px, calc(100vw - 32px)); }
             <option value="none">No sub-folders: everything directly in this folder</option>
           </select></label>
         <div class="help">With sub-folders, playlists also get their own folder inside the site folder.</div>
+        <h4 style="margin-top:20px">History</h4>
+        <label class="check"><input type="checkbox" id="keep_history"> Remember finished and failed downloads between launches</label>
+        <div class="help">Turn this off and the list starts empty each time you open Grab; only downloads still waiting come back. Your files are never touched.</div>
       </section>
 
       <section class="pane" data-pane="speed" hidden>
@@ -514,6 +520,9 @@ const ICON = {
   image: '<rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="5.5" cy="6.5" r="1"/><path d="M14 10.5l-3.5-3.5L4 13"/>',
   audio: '<path d="M6 12V4l7-1.5v8"/><circle cx="4.5" cy="12" r="1.5"/><circle cx="11.5" cy="10.5" r="1.5"/>',
   file: '<path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/>', list: '<path d="M5 4h8M5 8h8M5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"/>',
+  top: '<path d="M4 3h8M8 13V6M5 8.5 8 5.5l3 3"/>', bottom: '<path d="M4 13h8M8 3v7M5 7.5l3 3 3-3"/>',
+  export: '<path d="M8 10V2.5M5 5l3-3 3 3M3 9v3.5A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5V9"/>',
+  import: '<path d="M8 2.5V10M5 7.5l3 3 3-3M3 9v3.5A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5V9"/>',
 };
 const icon = (n, size) => `<svg class="i" viewBox="0 0 16 16"${size ? ` style="width:${size}px;height:${size}px"` : ""}>${ICON[n]}</svg>`;
 
@@ -531,10 +540,10 @@ const PRESETS = [
 ];
 const FIELDS = ["out_dir","cookies_browser","cookies_file","container","items","rate_limit","fragments","aria2_conns","referer",
                 "archive","expand_playlists","aria2","aria2_streams","smart","folders","media","compat","sub_langs","sponsorblock","chapters","thumbnail","polite","auto_update","update_channel",
-                "speed_limit","limit_only_window","limit_start","limit_end","window_on","window_start","window_end","pause_outside","keep_awake"];
+                "speed_limit","limit_only_window","limit_start","limit_end","window_on","window_start","window_end","pause_outside","keep_awake","keep_history"];
 const STATUS = {running: "Downloading", queued: "Queued", paused: "Paused", done: "Done", skipped: "Already had", error: "Failed", cancelled: "Cancelled"};
 
-let cfg, prefs = {}, filter = "all", query = "", jobsCache = [];
+let cfg, prefs = {}, filter = "all", query = "", jobsCache = [], queuedTotal = 0;
 const prevStatus = new Map(), openDetails = new Set(), collapsed = new Set(), rows = new Map();
 
 const api = (path, body) => fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)}).then(r => r.json());
@@ -610,7 +619,7 @@ async function init() {
     b === "extension" ? "Brave extension (shared)" : b ? b[0].toUpperCase() + b.slice(1) : "None"}</option>`).join("");
   const vals = {auto_update: true, update_channel: "stable", speed_limit: 0, limit_only_window: false, limit_start: "09:00",
                 limit_end: "23:00", window_on: false, window_start: "01:00", window_end: "07:00", pause_outside: true,
-                keep_awake: true, ...cfg.defaults, workers: cfg.workers, ...prefs};
+                keep_awake: true, keep_history: true, ...cfg.defaults, workers: cfg.workers, ...prefs};
   for (const k of ["compat"]) vals[k] = String(vals[k] ?? true);
   for (const f of FIELDS) { const el = $("#" + f); if (el.type === "checkbox") el.checked = !!vals[f]; else el.value = vals[f] ?? ""; }
   $("#workers").value = vals.workers; $("#workersVal").textContent = vals.workers;
@@ -675,6 +684,22 @@ async function go(text, extra = {}) {
   filter = "all"; tick();
 }
 $("#go").onclick = () => go();
+
+// Import: links from text files (a list saved by Export, or any file with links in it) go into the box
+$("#importBtn").onclick = () => $("#importFile").click();
+$("#importFile").onchange = async e => {
+  const text = (await Promise.all([...e.target.files].map(f => f.text()))).join("\n");
+  e.target.value = "";
+  const n = linksIn(text).length;
+  if (!n) { toast("No links found in that file"); return; }
+  appendLinks(text); autoGrow(); updateAnalyzeBtn(); updateProfileHint();
+  toast(`${n} link${n > 1 ? "s" : ""} added to the box`);
+};
+// Export: what the current tab shows, as a text file in the download folder
+$("#exportLinks").onclick = async () => {
+  const r = await api("/api/export", {which: filter, reveal: true});
+  toast(r.count ? `Saved ${r.count} link${r.count > 1 ? "s" : ""} to ${r.path.split("/").pop()}` : "No links to export in this view");
+};
 
 $("#toggleAdv").onclick = () => { const a = $("#adv"); a.hidden = !a.hidden; $("#toggleAdv").innerHTML = icon("chev", 13) + (a.hidden ? "More options" : "Fewer options"); };
 $("#changeFolder").onclick = () => native ? native.postMessage({action: "pickFolder", current: $("#out_dir").value}) : (openSettings(), $("#out_dir").focus());
@@ -745,8 +770,8 @@ $("#clearAll").onclick = () => clearList(true);
 $("#openDir").onclick = () => api("/api/open", {path: $("#out_dir").value});
 $("#q").addEventListener("input", e => { query = e.target.value.toLowerCase(); render(); });
 $("#tabs").onclick = e => { const b = e.target.closest("[data-f]"); if (b) { filter = b.dataset.f; render(); } };
-const FIXNAMES = {gentle: "fewer connections", client: "another YouTube player", aria2: "aria2c multi-connection",
-                  native: "built-in downloader", simple: "simpler format", "one-connection": "1 connection"};
+const FIXNAMES = {gentle: "fewer connections", client: "another YouTube player", impersonate: "browser TLS",
+                  aria2: "aria2c multi-connection", native: "built-in downloader", simple: "simpler format", "one-connection": "1 connection"};
 let learned = {};
 function renderLearned() {
   const e = Object.entries(learned);
@@ -794,14 +819,21 @@ async function analyzeLink() {
       <div class="meta" style="white-space:normal;color:var(--err)">${esc(r.error)}</div>${r.tip ? `<div class="tip">${esc(r.tip)}</div>` : ""}</div>
       <button class="ibtn" id="anClose">${icon("x")}</button></div>
       ${r.needs_login ? loginFix($("#cookies_browser").value, "this site", 'data-anfix="1"') : ""}`;
+  } else if (r.kind === "file") {
+    const what = [r.ext ? `${r.ext} ${r.file_kind === "image" ? "image" : "file"}` : "Direct file", r.size ? bytes(r.size) : "", r.site].filter(Boolean).join(" · ");
+    panel.innerHTML = head(what) +
+      `<div class="an-row"><span class="spacer"></span><button class="btn primary" id="anFileGo">Download file</button></div>`;
+    $("#anFileGo").onclick = () => { panel.hidden = true; go(); };
   } else if (r.kind === "profile" || r.kind === "playlist") {
-    const what = r.kind === "profile" ? `A whole profile on ${r.site}` : `${r.count || "?"} videos in this playlist/channel`;
+    const what = r.kind === "profile"
+      ? `A whole profile on ${r.site}`
+      : `${r.count || "?"} ${r.item_kind === "files" ? "files" : "videos"} ${r.item_kind === "files" ? "on this page" : "in this playlist/channel"}`;
     panel.innerHTML = head(what + (r.uploader ? " · " + r.uploader : "")) +
       (r.first?.length ? `<div class="help">Starts with: ${esc(r.first.join(" · "))}</div>` : "") +
-      `<div class="an-row"><button class="btn primary" id="anAll">Download all</button><button class="btn" id="anWatch">Watch for new posts instead</button>
+      `<div class="an-row"><button class="btn primary" id="anAll">Download all</button>${r.item_kind === "files" ? "" : `<button class="btn" id="anWatch">Watch for new posts instead</button>`}
        <span>Tip: limit it with “Only items” under More options, e.g. 1-20.</span></div>`;
     $("#anAll").onclick = () => { panel.hidden = true; go(); };
-    $("#anWatch").onclick = () => { panel.hidden = true; $("#watchInstead").hidden = false; setView("watch"); $("#wUrl").value = url; ta.value = ""; updateCount(); updateProfileHint(); };
+    if ($("#anWatch")) $("#anWatch").onclick = () => { panel.hidden = true; $("#watchInstead").hidden = false; setView("watch"); $("#wUrl").value = url; ta.value = ""; updateCount(); updateProfileHint(); };
   } else {
     const opts = r.options.map((o, i) => `<label class="an-opt"><input type="radio" name="anq" value="v:${o.height}" ${i === 0 ? "checked" : ""}>
         <span class="q">${o.label}${o.fps > 30 ? o.fps : ""}</span>
@@ -1037,6 +1069,7 @@ document.addEventListener("click", e => {
   if (act === "collapse") { collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id); render(); return; }
   if (act === "copy") return copy(j.url, "Link copied");
   if (act === "copy_details") return copyDetails(id);
+  if (act === "top" || act === "bottom") return post("/api/move", {id, to: act});
   post("/api/" + act, {id});
 });
 
@@ -1085,6 +1118,8 @@ function rowHTML(j, kids) {
   if (j.children) acts.push(`<button class="ibtn ${collapsed.has(j.id) ? "closed" : ""}" data-act="collapse" title="${collapsed.has(j.id) ? "Show" : "Hide"} items">${icon("chev")}</button>`);
   if (run) acts.push(`<button class="ibtn" data-act="pause" title="Pause">${icon("pause")}</button>`);
   if (st === "queued") acts.push(`<button class="ibtn" data-act="pause" title="Hold">${icon("pause")}</button>`);
+  if (st === "queued" && j.queue_pos > 1) acts.push(`<button class="ibtn" data-act="top" title="Move to the front of the line">${icon("top")}</button>`);
+  if (st === "queued" && j.queue_pos != null && j.queue_pos < queuedTotal) acts.push(`<button class="ibtn" data-act="bottom" title="Move to the back of the line">${icon("bottom")}</button>`);
   const waitsForWindow = sched.window_on && !sched.window_open && !j.force;
   if (st === "queued" && waitsForWindow) acts.push(`<button class="ibtn" data-act="start_now" title="Start now (ignore the download window)">${icon("play")}</button>`);
   if (st === "paused") acts.push(`<button class="ibtn" data-act="${waitsForWindow ? "start_now" : "resume"}" title="Resume">${icon("play")}</button>`);
@@ -1112,6 +1147,12 @@ function rowHTML(j, kids) {
     <div class="side"><span class="status st-${groupActive ? "running" : st}">${label}</span><div class="acts">${acts.join("")}</div></div>`;
 }
 
+// items of one playlist/page: started and finished ones by age, then the waiting ones in the order they'll start
+const kidOrder = (a, b) => {
+  const qa = a.status === "queued" && a.queue_pos != null, qb = b.status === "queued" && b.queue_pos != null;
+  return qa !== qb ? qa - qb : qa ? a.queue_pos - b.queue_pos : a.id - b.id;
+};
+
 function render() {
   const jobs = jobsCache, byParent = new Map();
   for (const j of jobs) if (j.parent) { if (!byParent.has(j.parent)) byParent.set(j.parent, []); byParent.get(j.parent).push(j); }
@@ -1120,13 +1161,16 @@ function render() {
   const kidsOf = j => byParent.get(j.id) || [];
   const groupActive = j => active(j.status) || kidsOf(j).some(k => active(k.status));
   const rank = j => j.status === "running" || kidsOf(j).some(k => k.status === "running") ? 0 : groupActive(j) ? 1 : 2;
-  tops.sort((a, b) => rank(a) - rank(b) || (rank(a) < 2 ? a.id - b.id : (b.finished || b.created) - (a.finished || a.created)));
+  const qo = j => j.queue_pos ?? 1e9, place = j => Math.min(qo(j), ...kidsOf(j).map(qo));  // where it stands in the line
+  tops.sort((a, b) => rank(a) - rank(b) || (rank(a) === 1 ? place(a) - place(b) || a.id - b.id
+    : rank(a) === 0 ? a.id - b.id : (b.finished || b.created) - (a.finished || a.created)));
+  queuedTotal = jobs.filter(j => j.status === "queued").length;
 
   const f = FILTERS[filter];
   const matchQ = j => !query || [j.title, j.url, j.site, j.uploader].join(" ").toLowerCase().includes(query);
   const out = [];
   for (const t of tops) {
-    const kids = kidsOf(t).sort((a, b) => a.id - b.id);
+    const kids = kidsOf(t).sort(kidOrder);
     const kidsShown = kids.filter(k => f(k) && matchQ(k));
     const selfOk = t.children ? (filter === "all" && matchQ(t)) || kidsShown.length > 0 : f(t) && matchQ(t);
     if (!selfOk) continue;
@@ -1147,6 +1191,7 @@ function render() {
   $("#resumeAll").hidden = !jobs.some(j => j.status === "paused");
   $("#retryAll").hidden = !jobs.some(j => j.status === "error");
   const finished = jobs.some(j => ["done", "skipped", "cancelled"].includes(j.status)), failed = jobs.some(j => j.status === "error");
+  $("#exportLinks").hidden = !jobs.length;
   $("#clearAll").hidden = !(finished || failed);
   $("#clear").hidden = !(finished && failed);  // only when it would do something different from Clear all
 

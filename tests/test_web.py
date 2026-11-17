@@ -237,3 +237,71 @@ def test_menu_bar_paste_uses_saved_format(gui, site):
     (job,) = wait_jobs(base)
     assert job["status"] == "done", job["error"]
     assert job["mode"] == "audio" and job["files"][-1].endswith(".mp3")   # your saved "MP3 audio" choice
+
+
+def test_move_endpoint_changes_who_is_next(gui, site):
+    base, _, _ = gui
+    post(base + "/api/prefs", {"prefs": {"workers": 1}})
+    post(base + "/api/add", {"urls": f"{site}/slow/big.bin", "options": {"mode": "direct", "aria2": False}})  # one slow connection holds the only worker
+    deadline = time.time() + 20
+    while not any(j["status"] == "running" for j in get(base + "/api/jobs")["jobs"]):
+        assert time.time() < deadline
+        time.sleep(0.1)
+    post(base + "/api/add", {"urls": "\n".join(f"{site}/files/data.zip?n={n}" for n in (1, 2, 3))})
+
+    def line():
+        waiting = [j for j in get(base + "/api/jobs")["jobs"] if j["queue_pos"]]
+        return [j["url"][-1] for j in sorted(waiting, key=lambda j: j["queue_pos"])]
+
+    assert line() == ["1", "2", "3"]
+    third = next(j for j in get(base + "/api/jobs")["jobs"] if j["url"].endswith("n=3"))
+    assert post(base + "/api/move", {"id": third["id"], "to": "top"}) == {"ok": True}
+    assert line() == ["3", "1", "2"]
+    assert post(base + "/api/move", {"id": third["id"], "to": "bottom"}) == {"ok": True}
+    assert line() == ["1", "2", "3"]
+    assert post(base + "/api/move", {"id": third["id"], "to": "sideways"}) == {"ok": False}
+    post(base + "/api/cancel", {})
+
+
+def test_export_writes_a_list_that_can_be_imported_again(gui, site):
+    base, _, tmp = gui
+    assert post(base + "/api/export", {"which": "all"}) == {"count": 0}       # nothing yet: no empty file
+    post(base + "/api/add", {"urls": f"{site}/files/data.zip\n{site}/nothing-here"})
+    wait_jobs(base)
+    failed = post(base + "/api/export", {"which": "failed"})
+    assert failed["count"] == 1
+    assert Path(failed["path"]).parent == tmp / "dl" and Path(failed["path"]).name.startswith("grab-links-failed-")
+    assert Path(failed["path"]).read_text() == f"{site}/nothing-here\n"
+    everything = post(base + "/api/export", {"which": "nonsense"})              # unknown view: everything
+    assert Path(everything["path"]).read_text().split() == [f"{site}/files/data.zip", f"{site}/nothing-here"]
+
+
+def test_history_switch_is_saved_and_cleans_the_file(gui, site):
+    base, proc, tmp = gui
+    post(base + "/api/add", {"urls": f"{site}/files/data.zip"})
+    wait_jobs(base)
+    history = tmp / "state" / "history.json"
+    deadline = time.time() + 10
+    while not (history.exists() and json.loads(history.read_text())["jobs"]):   # autosave runs every couple of seconds
+        assert time.time() < deadline
+        time.sleep(0.2)
+    post(base + "/api/prefs", {"prefs": {"keep_history": False}})
+    assert json.loads(history.read_text())["jobs"] == []
+    assert len(get(base + "/api/jobs")["jobs"]) == 1                            # still on screen
+    assert get(base + "/api/config")["prefs"]["keep_history"] is False
+
+
+def test_extension_sends_a_cdn_video_with_no_extension_as_a_plain_file(gui, site):
+    """A signed CDN link (no extension, application/octet-stream) is what yt-dlp can only save as .unknown_video."""
+    base, _, tmp = gui
+    ext = "chrome-extension://hejmghgkkgadcieojoganellldeehhog"
+    page = f"{site}/octet.html"
+    post(base + "/api/ext/add", {"url": f"{site}/octet/abc123?sig=1", "page": page, "title": "Octet page", "direct": True}, origin=ext)
+    (done,) = wait_jobs(base)
+    assert done["status"] == "done", (done["error"], done["log"])
+    (file,) = done["files"]
+    assert Path(file).parent == tmp / "dl" / "127.0.0.1" and Path(file).name == "Octet page.mp4"   # named by what it is
+    probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file],
+                           capture_output=True, text=True)
+    assert float(probe.stdout) > 5                                                                 # and it plays
+    assert not list((tmp / "dl").rglob("*.unknown_video")) and not list((tmp / "dl").rglob("*.part"))

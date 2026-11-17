@@ -77,19 +77,20 @@ def media(tmp_path_factory) -> Path:
     (root / "files").mkdir()
     # 12 s noisy video (~13 MB) so it is bigger than one 10 MB download chunk
     _ffmpeg("-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30", "-f", "lavfi", "-i", "sine=frequency=440",
-            "-t", "12", "-vf", "noise=alls=60:allf=t", "-c:v", "libx264", "-preset", "ultrafast", "-b:v", "10M",
+            "-t", "12", "-vf", "noise=alls=60:allf=t", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-b:v", "10M",
             "-minrate", "10M", "-maxrate", "10M", "-bufsize", "4M", "-c:a", "aac", "-shortest", str(root / "files/clip.mp4"))
     # a short HLS stream (playlist + 1-second segments)
     (root / "files/hls").mkdir()
     _ffmpeg("-f", "lavfi", "-i", "testsrc=size=640x360:rate=25", "-f", "lavfi", "-i", "sine=frequency=330", "-t", "6",
-            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-f", "hls", "-hls_time", "1",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-c:a", "aac", "-f", "hls", "-hls_time", "1",
             "-hls_playlist_type", "vod", str(root / "files/hls/index.m3u8"))
     (root / "files/data.zip").write_bytes(os.urandom(3 * 1024 * 1024))
     (root / "files/big.bin").write_bytes(os.urandom(6 * 1024 * 1024))
     (root / "page.html").write_text("<html><body><h1>No video here</h1><p>Just text.</p></body></html>")
     for n in range(1, 5):  # short episodes for the watch-list tests
         _ffmpeg("-f", "lavfi", "-i", f"testsrc=size=320x240:rate=15", "-f", "lavfi", "-i", f"sine=frequency={200 + 100 * n}",
-                "-t", "2", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(root / f"files/ep{n}.mp4"))
+                "-t", "2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-c:a", "aac", "-shortest",
+                str(root / f"files/ep{n}.mp4"))
     (root / "feed.txt").write_text("ep2\nep1\n")
     # sources YouTube serves at 1440p/4K: VP9 (WebM, Opus audio) and 10-bit HDR AV1
     _ffmpeg("-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30", "-f", "lavfi", "-i", "sine=frequency=500", "-t", "3",
@@ -99,9 +100,35 @@ def media(tmp_path_factory) -> Path:
             "-c:v", "libsvtav1", "-preset", "12", "-pix_fmt", "yuv420p10le", "-svtav1-params",
             "color-primaries=9:transfer-characteristics=16:matrix-coefficients=9", "-c:a", "aac", "-shortest",
             str(root / "files/hdr_av1.mp4"))
+    # H.264 in 4:4:4 (QuickTime can't play it, so it must be converted) and HEVC already tagged hvc1 (must be left alone)
+    _ffmpeg("-f", "lavfi", "-i", "testsrc=size=320x240:rate=15", "-f", "lavfi", "-i", "sine=frequency=700", "-t", "2",
+            "-c:v", "libx264", "-pix_fmt", "yuv444p", "-preset", "ultrafast", "-c:a", "aac", "-shortest",
+            str(root / "files/h264_444.mp4"))
+    _ffmpeg("-f", "lavfi", "-i", "testsrc=size=320x240:rate=15", "-f", "lavfi", "-i", "sine=frequency=800", "-t", "2",
+            "-c:v", "libx265", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-tag:v", "hvc1", "-c:a", "aac", "-shortest",
+            str(root / "files/hevc_hvc1.mp4"))
     (root / "files/hls/master.m3u8").write_text(
         "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=640x360\nindex.m3u8\n")
     (root / "files/tiny-preview.mp4").write_bytes((root / "files/clip.mp4").read_bytes()[:100_000])
+    shutil.copyfile(root / "files/ep1.mp4", root / "files/ep1.mov")
+    (root / "spa.html").write_text("""<!doctype html><html><head><title>Dynamic SPA Player</title></head><body>
+<div id="app">Loading player...</div>
+<script>
+setTimeout(() => {
+  fetch("/files/hls/master.m3u8").then(r => r.text()).then(() => fetch("/files/hls/index.m3u8"));
+}, 100);
+</script></body></html>""")
+    (root / "embed_player.html").write_text("""<!doctype html><html><head><title>Embedded Frame</title></head><body>
+<script>
+const cfg = {"hlsUrl": "\\/files\\/hls\\/master.m3u8"};
+</script></body></html>""")
+    (root / "embed_host.html").write_text("""<!doctype html><html><head><title>Hosted Video Article</title></head><body>
+<h1>Article</h1><iframe src="/embed_player.html"></iframe></body></html>""")
+    (root / "files_index.html").write_text("""<!doctype html><html><head><title>Release Bundle</title></head><body>
+<a href="/files/ep1.mp4">Episode One</a>
+<a href="/files/ep2.mp4">Episode Two</a>
+<a href="/files/data.zip">Checksum Archive</a>
+</body></html>""")
     (root / "player.html").write_text("""<!doctype html><html><head><title>My Test Video Page</title></head><body>
 <h1>Player</h1>
 <video id="v" src="/protected/clip.mp4" autoplay muted playsinline></video>
@@ -110,6 +137,19 @@ def media(tmp_path_factory) -> Path:
   fetch("/protected/hls/master.m3u8").then(r => r.text()).then(() => fetch("/protected/hls/index.m3u8"));
   fetch("/files/tiny-preview.mp4");  // a hover-preview clip that should NOT be offered
 </script></body></html>""")
+    # delivery styles the extension used to miss: an unlabelled signed-CDN video, a whole video called part1.mp4,
+    # a page that rewrites its #hash while playing, and one that only loads a tiny preview plus stream pieces
+    (root / "octet.html").write_text("""<!doctype html><html><head><title>Octet page</title></head><body>
+<video src="/octet/abc123?sig=1" autoplay muted playsinline></video></body></html>""")
+    (root / "parts.html").write_text("""<!doctype html><html><head><title>Parts page</title></head><body>
+<video src="/parts/video_part1.mp4" autoplay muted playsinline></video></body></html>""")
+    (root / "hash.html").write_text("""<!doctype html><html><head><title>Hash page</title></head><body>
+<video id="v" src="/files/clip.mp4" autoplay muted playsinline></video>
+<script>document.getElementById("v").addEventListener("loadeddata", () => setTimeout(() => { location.hash = "t=5"; }, 800));</script>
+</body></html>""")
+    (root / "previews.html").write_text("""<!doctype html><html><head><title>Previews page</title></head><body>
+<video src="/files/tiny-preview.mp4" autoplay muted playsinline></video>
+<script>fetch("/files/hls/index0.ts");</script></body></html>""")
     # a photo page for the extension's "Everything on this page"
     pics = root / "files/pics"
     for name, size in [("big.png", "1200x800"), ("icon.png", "16x16"), ("thumb.jpg", "160x90"), ("wide.jpg", "1600x900"),
@@ -171,6 +211,24 @@ class _Site(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
+        if path.startswith("/cookie-protected/"):
+            if "session=ok123" not in (self.headers.get("Cookie") or ""):
+                self.send_response(403)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            path = "/files/" + path[len("/cookie-protected/"):]
+        if path.startswith("/parts/"):  # a whole video whose name looks like a piece of one
+            path = "/files/clip.mp4"
+        octet = path.startswith("/octet/")
+        if octet:  # a signed CDN link: no extension, and the server doesn't say it's a video
+            path = "/files/clip.mp4"
+        if path.startswith("/longid/"):
+            path = "/files/ep1.mp4"
+        cdn_slice = False
+        if path.startswith("/cdn-range/"):
+            path = "/files/" + path[len("/cdn-range/"):]
+            cdn_slice = "bytestart=" in self.path
         for prefix in ("/picky/", "/slow/"):
             if path.startswith(prefix):
                 mode, path = prefix.strip("/"), "/files/" + path[len(prefix):]
@@ -180,7 +238,7 @@ class _Site(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        size = f.stat().st_size
+        size = min(100, f.stat().st_size) if cdn_slice else f.stat().st_size
         start, end = 0, size - 1
         rng = self.headers.get("Range")
         if rng:
@@ -192,8 +250,10 @@ class _Site(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-        ctype = {".mp4": "video/mp4", ".html": "text/html", ".m3u8": "application/vnd.apple.mpegurl", ".ts": "video/mp2t",
-                 ".zip": "application/zip", ".png": "image/png", ".jpg": "image/jpeg"}.get(f.suffix, "application/octet-stream")
+        ctype = {".mp4": "video/mp4", ".mov": "video/quicktime", ".html": "text/html", ".m3u8": "application/vnd.apple.mpegurl",
+                 ".ts": "video/mp2t", ".zip": "application/zip", ".png": "image/png", ".jpg": "image/jpeg"}.get(f.suffix, "application/octet-stream")
+        if octet:
+            ctype = "application/octet-stream"
         self.send_response(206 if rng else 200)
         self.send_header("Content-Type", ctype)
         self.send_header("Accept-Ranges", "bytes")

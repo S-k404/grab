@@ -280,6 +280,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         return nil
     }
 
+    // "Import…" in the page opens a file input; WKWebView only shows the picker if we provide it.
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.beginSheetModal(for: window) { resp in
+            completionHandler(resp == .OK ? panel.urls : nil)
+        }
+    }
+
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if let u = action.request.url, let host = u.host, host != "127.0.0.1", action.navigationType == .linkActivated {

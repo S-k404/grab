@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { pickItems, mergeScans } from "../browser-extension/scan.js";
-import { classify, parseHls, dashHasDrm, dashIsLive, label, totalSize, loadsVideo, videoPage, siteOf, autoOn, autoWorthy, autoKey }
+import { classify, explain, parseHls, dashHasDrm, dashIsLive, label, totalSize, loadsVideo, videoPage, siteOf, autoOn, autoWorthy, autoKey }
   from "../browser-extension/detect.js";
 
 const H = (o) => Object.entries(o).map(([name, value]) => ({ name, value: String(value) }));
@@ -24,6 +24,7 @@ test("progressive video played by a <video> tag is found, with its real size", (
   assert.equal(classify(req("https://m.site.com/a.mp3", { "Content-Type": "audio/mpeg", "Content-Length": 5e6 }, "media"))?.audio, true);
   assert.equal(classify(req("https://m.site.com/song.m4a", { "Content-Length": 5e6 }, "media"))?.audio, true);
   assert.equal(classify(req("https://m.site.com/stream?id=9", { "Content-Type": "video/webm", "Content-Length": 9e6 }, "media"))?.kind, "WEBM");
+  assert.equal(classify(req("https://m.site.com/dl?id=7", { "Content-Type": "application/octet-stream", "Content-Disposition": 'attachment; filename="clip.mp4"', "Content-Length": 9e6 }, "media"))?.kind, "MP4");
 });
 
 test("stream pieces, previews, ads and errors are ignored", () => {
@@ -110,6 +111,8 @@ test("auto-download: single-video pages give a clean link; feeds, channels and p
   assert.equal(vp("https://youtu.be/dQw4w9WgXcQ?si=abc"), "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
   assert.equal(vp("https://www.youtube.com/shorts/abcdefghijk"), "https://www.youtube.com/shorts/abcdefghijk");
   assert.equal(vp("https://www.instagram.com/reel/C9xYz12AbCd/?igsh=xyz"), "https://www.instagram.com/reel/C9xYz12AbCd");
+  assert.equal(vp("https://www.threads.com/@someone/post/DfukAgqkV3p"), "https://www.threads.com/@someone/post/DfukAgqkV3p");
+  assert.equal(vp("https://www.threads.net/t/DfukAgqkV3p"), "https://www.threads.net/t/DfukAgqkV3p");
   assert.equal(vp("https://x.com/someone/status/1850000000000000000?s=20"), "https://x.com/someone/status/1850000000000000000");
   assert.equal(vp("https://www.reddit.com/r/videos/comments/abc123/a_title/"), "https://www.reddit.com/r/videos/comments/abc123");
   assert.equal(vp("https://www.tiktok.com/@user/video/7300000000000000000"), "https://www.tiktok.com/@user/video/7300000000000000000");
@@ -162,4 +165,51 @@ test("everything on the page: filter by kind and size, unknown sizes always show
   // the same picture found in two frames: listed once, with the bigger size
   const merged = mergeScans([[{ url: "a", kind: "image", w: 0, h: 0, name: "" }], [{ url: "a", kind: "image", w: 640, h: 480, name: "Cat" }]]);
   assert.deepEqual(merged, [{ url: "a", kind: "image", w: 640, h: 480, name: "Cat" }]);
+});
+
+test("a <video> request the server doesn't label is still media (signed CDN links, octet-stream)", () => {
+  const signed = "https://cdn.site.com/v/a3f9c0e1?sig=abc&exp=1";
+  assert.deepEqual(classify(req(signed, { "Content-Type": "application/octet-stream", "Content-Length": 9e6 }, "media")),
+                   { kind: "Video", manifest: false, size: 9e6, audio: false, direct: true });   // direct: Grab must treat it as a plain file
+  assert.equal(classify(req(signed, { "Content-Length": 9e6 }, "media"))?.kind, "Video");          // no content type at all
+  assert.equal(classify(req(signed, { "Content-Type": "binary/octet-stream", "Content-Length": 9e6 }, "media"))?.kind, "Video");
+  // only when a media tag is playing it: a page fetch()ing an unlabelled blob could be anything
+  assert.equal(classify(req(signed, { "Content-Type": "application/octet-stream", "Content-Length": 9e6 })), null);
+  // an error page or a picture is never video, whoever asked
+  assert.equal(classify(req(signed, { "Content-Type": "text/html", "Content-Length": 9e6 }, "media")), null);
+  assert.equal(classify(req(signed, { "Content-Type": "image/png", "Content-Length": 9e6 }, "media")), null);
+  assert.equal(classify(req(signed, { "Content-Type": "application/json", "Content-Length": 9e6 }, "media")), null);
+  // previews are still previews, and links with a real extension need no flag
+  assert.equal(classify(req(signed, { "Content-Type": "application/octet-stream", "Content-Length": 120000 }, "media")), null);
+  assert.equal(classify(req("https://m.site.com/clip.mp4", { "Content-Type": "video/mp4", "Content-Length": 9e6 }, "media")).direct, undefined);
+  // a download link whose file name only arrives in Content-Disposition has no extension in the link itself
+  const dl = classify(req("https://m.site.com/dl?id=7", { "Content-Type": "application/octet-stream", "Content-Disposition": 'attachment; filename="clip.mp4"', "Content-Length": 9e6 }, "media"));
+  assert.equal(dl.kind, "MP4");
+  assert.equal(dl.direct, true);
+});
+
+test("a file called part2.mp4 is a video; a small one named like that is a piece", () => {
+  assert.equal(classify(req("https://cdn.site.com/series/part2.mp4", { "Content-Type": "video/mp4", "Content-Length": 90e6 }, "media"))?.kind, "MP4");
+  assert.equal(classify(req("https://cdn.site.com/series/video_part1.mp4", { "Content-Type": "video/mp4", "Content-Range": "bytes 0-999999/45000000" }, "media"))?.kind, "MP4");
+  assert.equal(classify(req("https://cdn.site.com/v/seg-12.mp4", { "Content-Type": "video/mp4", "Content-Length": 2e6 }, "media")), null);
+  assert.equal(classify(req("https://cdn.site.com/v/chunk3.mp4", { "Content-Type": "video/mp4" }, "media")), null);   // unsized: a piece
+  assert.equal(classify(req("https://cdn.site.com/v/chunk_00042.m4s", { "Content-Type": "video/iso.segment", "Content-Length": 50e6 }, "media")), null);   // never, however big
+});
+
+test("explain: why something that looks like media was left out", () => {
+  assert.deepEqual(explain(req("https://cdn.site.com/v/seg-12.ts", { "Content-Type": "video/mp2t" })), { why: "piece", size: null });
+  assert.equal(explain(req("https://cdn.site.com/v/chunk_00042.m4s", { "Content-Type": "video/iso.segment", "Content-Length": 9e5 }, "media")).why, "piece");
+  assert.deepEqual(explain(req("https://cdn.site.com/hover-preview.mp4", { "Content-Type": "video/mp4", "Content-Length": 120000 }, "media")),
+                   { why: "small", kind: "MP4", size: 120000, direct: false });
+  assert.deepEqual(explain(req("https://cdn.site.com/blob/9f3a", { "Content-Type": "application/octet-stream", "Content-Length": 90000 }, "media")),
+                   { why: "small", kind: "Video", size: 90000, direct: true });
+  assert.equal(explain(req("https://cdn.site.com/a.mp4", { "Content-Type": "video/mp4", "Content-Length": 800000 })).why, "fetched");
+  // not worth listing: what classify() accepts, ads, YouTube's own streams, errors, pages and pictures
+  assert.equal(explain(req("https://cdn.site.com/big.mp4", { "Content-Type": "video/mp4", "Content-Length": 9e6 }, "media")), null);
+  assert.equal(explain(req("https://pubads.g.doubleclick.net/ad.mp4", { "Content-Type": "video/mp4", "Content-Length": 9e4 }, "media")), null);
+  assert.equal(explain(req("https://rr3---sn-abc.googlevideo.com/videoplayback?itag=137", { "Content-Type": "video/mp4", "Content-Length": 9e4 }, "media")), null);
+  assert.equal(explain(req("https://cdn.site.com/missing.mp4", {}, "media", 404)), null);
+  assert.equal(explain(req("https://cdn.site.com/watch.mp4", { "Content-Type": "text/html" }, "media")), null);
+  assert.equal(explain(req("https://cdn.site.com/logo.png", { "Content-Type": "image/png", "Content-Length": 9e4 }, "xmlhttprequest")), null);
+  assert.equal(explain(req("https://cdn.site.com/api/v1", { "Content-Type": "application/json" }, "xmlhttprequest")), null);
 });

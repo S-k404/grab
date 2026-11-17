@@ -19,20 +19,36 @@ import dataclasses
 import itertools
 import json
 import logging
+import mimetypes
 import os
 import random
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 import yt_dlp
 from yt_dlp.utils import DownloadCancelled, parse_bytes, sanitize_filename
+
+from .browser import _parse_netscape_cookies
+from .extract import (
+    ExtractedItem,
+    ExtractionResult,
+    _filename_from_cd,
+    extract_google_drive_confirm,
+    extract_media,
+    is_threads_url,
+    missing_media_ext,
+    resolve_file_host,
+    strip_byte_range,
+)
 
 MODES = ("auto", "video", "audio", "images", "direct")
 QUALITIES = ("best", "2160", "1440", "1080", "720", "480", "360")
@@ -248,11 +264,13 @@ def cookie_problem(msg: str) -> str:
 
 # Links ending in these go straight to aria2c instead of yt-dlp / gallery-dl.
 DIRECT_EXTS = {
-    "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst", "iso", "dmg", "pkg", "exe", "msi",
-    "apk", "apks", "xapk", "ipa", "deb", "rpm", "appimage", "pdf", "epub", "mobi", "cbz", "cbr",
-    "torrent", "bin", "dat", "img", "raw", "csv", "json", "txt", "doc", "docx", "xls", "xlsx",
-    "ppt", "pptx", "psd", "ai", "blend", "stl", "obj", "fbx", "glb", "safetensors", "ckpt", "gguf",
-    "jpg", "jpeg", "png", "gif", "webp", "avif", "heic", "bmp", "tif", "tiff", "svg",
+    "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst", "lz4", "iso", "dmg", "pkg", "exe", "msi",
+    "apk", "apks", "xapk", "ipa", "deb", "rpm", "appimage", "pdf", "epub", "mobi", "azw3", "fb2", "djvu",
+    "cbz", "cbr", "torrent", "bin", "dat", "img", "raw", "csv", "tsv", "json", "jsonl", "parquet", "txt",
+    "md", "srt", "vtt", "ass", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "psd",
+    "ai", "blend", "stl", "obj", "fbx", "glb", "gltf", "usdz", "safetensors", "ckpt", "gguf", "onnx", "pt",
+    "pth", "ttf", "otf", "woff2", "jpg", "jpeg", "png", "gif", "webp", "avif", "heic", "heif", "bmp", "tif",
+    "tiff", "svg", "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "wma",
 }
 
 USER_AGENT = (
@@ -308,6 +326,7 @@ class Options:
     polite: bool = True             # Instagram, X, TikTok...: one download at a time per site, with random pauses
     rate_limit: str = ""            # e.g. "5M" per job
     subfolder: str = ""             # set for playlist children
+    filename: str = ""              # exact file name for one link of a page batch (see batch_names), so clashes stay apart
 
     @classmethod
     def from_dict(cls, d: dict) -> "Options":
@@ -427,8 +446,9 @@ class Manager:
 
     HISTORY_LIMIT = 1000
 
-    def __init__(self, workers: int = 4, state_file: str | None = None):
+    def __init__(self, workers: int = 4, state_file: str | None = None, keep_history: bool = True):
         self.workers = max(1, workers)
+        self.keep_history = keep_history    # False: finished jobs are never written to disk (only what's still waiting)
         self.jobs: dict[int, Job] = {}
         self.queue: collections.deque[int] = collections.deque()
         self.running: set[int] = set()
@@ -447,11 +467,13 @@ class Manager:
 
     # ---- public API -------------------------------------------------------
     def add(self, urls, opts: Options, parent: int | None = None, front: bool = False,
-            titles: dict[str, str] | None = None) -> list[Job]:
-        """titles: names to use for links that don't carry their own (e.g. podcast feed items)."""
+            titles: dict[str, str] | None = None, filenames: dict[str, str] | None = None) -> list[Job]:
+        """titles: names to use for links that don't carry their own (e.g. podcast feed items).
+        filenames: exact file names to save under (direct downloads from one page)."""
         new = []
         for u in parse_urls(urls):
-            job = Job(url=u, opts=dataclasses.replace(opts, title=(titles or {}).get(u) or opts.title), parent=parent)
+            job = Job(url=u, opts=dataclasses.replace(opts, title=(titles or {}).get(u) or opts.title,
+                                                      filename=(filenames or {}).get(u) or opts.filename), parent=parent)
             new.append(job)
         with self.cv:
             for job in new:
@@ -471,7 +493,8 @@ class Manager:
         parent = Job(url=url, opts=batches[0][1], title=title, status="done", progress=100.0, thumbnail=thumbnail)
         with self.cv:
             self.jobs[parent.id] = parent
-        kids = [k for urls, o, names in batches if urls for k in self.add(urls, o, parent=parent.id, titles=names)]
+        kids = [k for urls, o, names in batches if urls
+                for k in self.add(urls, o, parent=parent.id, titles=names, filenames=names)]
         parent.children, parent.stage, parent.finished = len(kids), f"page · {len(kids)} files", time.time()
         return parent
 
@@ -554,10 +577,8 @@ class Manager:
     def clear_finished(self, failed: bool = False) -> int:
         """Take finished jobs off the list (their files stay where they are). failed=True ("Clear all")
         clears failed ones too. Queued, downloading and paused jobs stay, and so do playlists still downloading."""
-        gone = ("done", "skipped", "cancelled") + (("error",) if failed else ())
         with self.cv:
-            busy = {j.parent for j in self.jobs.values() if j.status not in gone}
-            ids = [j.id for j in self.jobs.values() if j.status in gone and j.id not in busy]
+            ids = self._finished_ids(failed)
             for jid in ids:
                 del self.jobs[jid]
         try:
@@ -565,6 +586,53 @@ class Manager:
         except OSError:
             pass
         return len(ids)
+
+    def _finished_ids(self, failed: bool) -> list[int]:
+        """Jobs that are over (the caller holds the lock). failed=True counts failed ones too. A playlist or page
+        group stays while any of its items is still going."""
+        gone = ("done", "skipped", "cancelled") + (("error",) if failed else ())
+        busy = {j.parent for j in self.jobs.values() if j.status not in gone}
+        return [j.id for j in self.jobs.values() if j.status in gone and j.id not in busy]
+
+    def set_keep_history(self, keep: bool):
+        """Turn history on or off. Off only changes what is saved, so the list on screen stays until Grab quits."""
+        self.keep_history = keep
+        try:
+            self.save()
+        except OSError:
+            pass
+
+    def move(self, job_id: int, to: str) -> bool:
+        """Reorder a waiting job: "top" makes it the next to start, "bottom" lets everything else go first.
+        Only queued jobs have a place in the line (paused and finished ones don't)."""
+        with self.cv:
+            job = self.jobs.get(job_id)
+            if to not in ("top", "bottom") or not job or job.status != "queued" or job_id not in self.queue:
+                return False
+            self.queue.remove(job_id)
+            (self.queue.appendleft if to == "top" else self.queue.append)(job_id)
+            self.cv.notify_all()
+            return True
+
+    def export_rows(self, which: str = "all") -> list[dict]:
+        """Links to save as a list that "grab -f" and the Import button read again. "failed" and "active" give
+        each download that is failed/cancelled or still going (not the playlist around it); "done": finished ones;
+        "all": everything as it was added (a playlist counts once, not once per video)."""
+        with self.cv:
+            jobs = sorted(self.jobs.values(), key=lambda j: j.created)
+            known = set(self.jobs)
+        leaf = {"failed": ("error", "cancelled"), "active": ("queued", "running", "paused")}
+        if which in leaf:
+            picked = [j for j in jobs if j.status in leaf[which] and not j.children]
+        else:
+            ok = ("done", "skipped") if which == "done" else None
+            picked = [j for j in jobs if (j.parent is None or j.parent not in known) and (ok is None or j.status in ok)]
+        seen, rows = set(), []
+        for j in picked:
+            if j.url not in seen:
+                seen.add(j.url)
+                rows.append({"url": j.url, "title": j.title, "status": j.status, "site": j.site})
+        return rows
 
     def has_url(self, url: str) -> bool:
         """Is this link already queued, downloading or downloaded? (Failed and cancelled ones don't count.)"""
@@ -594,7 +662,9 @@ class Manager:
     def snapshot(self) -> list[dict]:
         with self.cv:
             jobs = list(self.jobs.values())
-        return [j.snapshot() for j in jobs]
+            waiting = (jid for jid in self.queue if jid in self.jobs and self.jobs[jid].status == "queued")
+            pos = {jid: n for n, jid in enumerate(waiting, 1)}
+        return [{**j.snapshot(), "queue_pos": pos.get(j.id)} for j in jobs]
 
     def idle(self) -> bool:
         with self.cv:
@@ -625,12 +695,16 @@ class Manager:
             self.jobs[job.id] = job
         if self.jobs:
             _ids = itertools.count(max(self.jobs) + 1)
+        if not self.keep_history:
+            for jid in self._finished_ids(failed=True):
+                del self.jobs[jid]
 
     def save(self):
         if not self.state_file:
             return
         with self.cv:
-            recs = [j.to_record() for j in self.jobs.values()][-self.HISTORY_LIMIT:]
+            skip = set() if self.keep_history else set(self._finished_ids(failed=True))
+            recs = [j.to_record() for j in self.jobs.values() if j.id not in skip][-self.HISTORY_LIMIT:]
         tmp = self.state_file.with_suffix(".tmp")
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(json.dumps({"version": 1, "jobs": recs, "learned": self.learned}))
@@ -721,6 +795,19 @@ class Manager:
                      else f": {job.error.splitlines()[0] if job.error else ''}" if job.status == "error" else "")
             with self.cv:
                 self.running.discard(job.id)
+                cfile = job.opts.cookies_file
+                if cfile and Path(cfile).name.startswith("page-"):
+                    in_use = any(
+                        j.id != job.id
+                        and j.status in ("queued", "downloading", "paused")
+                        and j.opts.cookies_file == cfile
+                        for j in self.jobs.values()
+                    )
+                    if not in_use:
+                        try:
+                            Path(cfile).unlink(missing_ok=True)
+                        except OSError:
+                            pass
                 self.cv.notify_all()
 
 
@@ -728,16 +815,41 @@ class Manager:
 # Routing
 # ---------------------------------------------------------------------------
 
+def _strip_url_token(part: str) -> str:
+    """Clean markdown wrappers and trailing prose punctuation around a pasted URL."""
+    part = part.strip()
+    if "](" in part:
+        m = re.search(r"\]\(((?:https?|feed|itpc)://\S+|//\S+)$", part, re.I)
+        if m:
+            part = m.group(1)
+    part = part.lstrip("<>\"'(").rstrip("<>\"'")
+    while part:
+        if part[-1] in ",;!?":
+            part = part[:-1]
+        elif part[-1] == ")" and part.count(")") > part.count("("):
+            part = part[:-1]
+        elif part[-1] == "]" and part.count("]") > part.count("["):
+            part = part[:-1]
+        elif part[-1] == ".":
+            part = part[:-1]
+        else:
+            break
+    return part.strip("<>\"'")
+
+
 def parse_urls(text) -> list[str]:
     """Accept a string or list; one URL per line, '#' comments allowed, de-duplicated."""
     if isinstance(text, str):
         text = text.splitlines()
     seen, out = set(), []
     for line in text:
-        for part in str(line).split():
-            part = part.strip().strip("<>\"'")
+        for raw_part in str(line).split():
+            part = _strip_url_token(raw_part)
             if not part or part.startswith("#"):
                 break
+            part = re.sub(r"^(?:feed|itpc)://", "https://", part, flags=re.I)
+            if part.startswith("//"):
+                part = "https:" + part
             if not re.match(r"^[a-z][a-z0-9+.-]*://", part, re.I):
                 if "." in part and "/" in part:
                     part = "https://" + part
@@ -760,21 +872,55 @@ _WRAPPERS = {
     "google.com": ("q", "url"),        # google.com/url?q=...
     "l.facebook.com": ("u",),
     "lm.facebook.com": ("u",),
+    "l.messenger.com": ("u",),
     "l.instagram.com": ("u",),
+    "lm.instagram.com": ("u",),
+    "l.threads.net": ("u",),
+    "l.threads.com": ("u",),
+    "l.wl.co": ("u",),
     "youtube.com": ("q",),             # youtube.com/redirect?q=...
     "steamcommunity.com": ("url",),    # /linkfilter/?url=...
+    "away.vk.com": ("to",),
+    "slack-redir.net": ("url",),
     "t.umblr.com": ("z",),
     "href.li": (),
 }
-_WRAPPER_PATHS = ("/media", "/url", "/l.php", "/redirect", "/linkfilter", "/")
+_WRAPPER_PATHS = ("/media", "/url", "/l.php", "/redirect", "/linkfilter", "/away.php", "/away", "/link", "/")
+_SOCIAL_MIRRORS = {
+    "vxtwitter.com": "x.com",
+    "fxtwitter.com": "x.com",
+    "fixupx.com": "x.com",
+    "twittpr.com": "x.com",
+    "xcancel.com": "x.com",
+    "nitter.net": "x.com",
+    "nitter.poast.org": "x.com",
+    "nitter.privacydev.net": "x.com",
+    "ddinstagram.com": "instagram.com",
+    "kkinstagram.com": "instagram.com",
+    "uuinstagram.com": "instagram.com",
+    "instagramez.com": "instagram.com",
+    "vxtiktok.com": "tiktok.com",
+    "tnktok.com": "tiktok.com",
+    "tfxktok.com": "tiktok.com",
+    "rxddit.com": "reddit.com",
+    "vxreddit.com": "reddit.com",
+    "fixthreads.net": "threads.net",
+    "vxthreads.net": "threads.net",
+    "fxbsky.app": "bsky.app",
+    "bskx.app": "bsky.app",
+    "bsyy.app": "bsky.app",
+    "vxbilibili.com": "bilibili.com",
+    "fxbilibili.com": "bilibili.com",
+}
 
 
 def unwrap_url(url: str, _depth: int = 0) -> str:
-    """Turn wrapper/redirect/preview links into the link that actually has the media.
+    """Turn wrapper/redirect/preview/mirror links into the link that actually has the media.
 
     reddit.com/media?url=https%3A%2F%2Fi.redd.it%2Fabc.jpeg  ->  https://i.redd.it/abc.jpeg
     preview.redd.it/abc.jpg?width=640&s=...                 ->  https://i.redd.it/abc.jpg   (full size)
     pbs.twimg.com/media/abc?format=jpg&name=small           ->  ...&name=orig              (full size)
+    fxtwitter.com/user/status/123                           ->  https://x.com/user/status/123
     google.com/url?q=..., l.facebook.com/l.php?u=..., youtube.com/redirect?q=... -> the target
     """
     if _depth > 3:
@@ -784,6 +930,25 @@ def unwrap_url(url: str, _depth: int = 0) -> str:
     q = urllib.parse.parse_qs(p.query)
     if host == "href.li" and p.query.startswith("http"):
         return unwrap_url(urllib.parse.unquote(p.query), _depth + 1)
+    if host.endswith(".safelinks.protection.outlook.com"):
+        target = (q.get("url") or [""])[0]
+        if re.match(r"^https?://", target):
+            return unwrap_url(target, _depth + 1)
+    if host == "youtube.com" and p.path.startswith("/attribution_link"):
+        rel = urllib.parse.unquote((q.get("u") or [""])[0])
+        if rel.startswith("/"):
+            return unwrap_url("https://www.youtube.com" + rel, _depth + 1)
+        if re.match(r"^https?://", rel):
+            return unwrap_url(rel, _depth + 1)
+    if host.startswith("google.") and p.path.startswith("/amp/s/"):
+        amp_target = "https://" + p.path[len("/amp/s/"):]
+        if p.query:
+            amp_target += "?" + p.query
+        return unwrap_url(amp_target, _depth + 1)
+    mirror_target = next((canon for m, canon in _SOCIAL_MIRRORS.items() if host == m or host.endswith("." + m)), None)
+    if mirror_target:
+        scheme = p.scheme or "https"
+        return unwrap_url(urllib.parse.urlunsplit(p._replace(scheme=scheme, netloc=mirror_target)), _depth + 1)
     keys = _WRAPPERS.get(host) or (_WRAPPERS.get("google.com") if host.startswith("google.") else None)
     if keys and (p.path.rstrip("/") + "/").startswith(tuple(w.rstrip("/") + "/" for w in _WRAPPER_PATHS)):
         if host == "reddit.com" and not p.path.startswith("/media"):
@@ -797,9 +962,18 @@ def unwrap_url(url: str, _depth: int = 0) -> str:
     if host == "preview.redd.it" and re.search(r"\.(jpe?g|png|gif|webp)$", p.path, re.I):
         name = p.path.rsplit("/", 1)[-1].split("-v0-")[-1]  # "some-title-v0-abc123.jpeg" -> "abc123.jpeg"
         return f"https://i.redd.it/{name}"
-    if host == "pbs.twimg.com" and p.path.startswith("/media/") and "name" in q:
-        q["name"] = ["orig"]
-        return urllib.parse.urlunsplit(p._replace(query=urllib.parse.urlencode({k: v[0] for k, v in q.items()})))
+    if host == "pbs.twimg.com" and p.path.startswith("/media/"):
+        path = re.sub(r":(orig|large|medium|small|thumb)$", "", p.path, flags=re.I)
+        if path != p.path or ("name" in q and q.get("name") != ["orig"]) or (not q and "." in path.rsplit("/", 1)[-1]):
+            q["name"] = ["orig"]
+            return urllib.parse.urlunsplit(p._replace(path=path, query=urllib.parse.urlencode({k: v[0] for k, v in q.items()})))
+    if host == "i.imgur.com" and p.path.lower().endswith(".gifv"):
+        return urllib.parse.urlunsplit(p._replace(path=p.path[:-5] + ".mp4"))
+    # Strip temporal media fragments (e.g. video.mov#t=0.1) so yt-dlp doesn't misread ".1" as the extension
+    if re.match(r"^t=\d", p.fragment or "") and re.search(
+        r"\.(mp4|mov|webm|mkv|m4v|m4a|mp3|aac|ogg|opus|flac|wav)$", p.path, re.I
+    ):
+        return urllib.parse.urlunsplit(p._replace(fragment=""))
     return url
 
 
@@ -807,13 +981,32 @@ def unwrap_url(url: str, _depth: int = 0) -> str:
 # i.redd.it/x.jpg land next to Reddit videos instead of in a generic folder.
 SITE_FOLDERS = {
     "reddit.com": "Reddit", "redd.it": "Reddit", "redditmedia.com": "Reddit", "redditstatic.com": "Reddit",
-    "x.com": "Twitter", "twitter.com": "Twitter", "twimg.com": "Twitter",
+    "x.com": "Twitter", "twitter.com": "Twitter", "twimg.com": "Twitter", "t.co": "Twitter",
     "youtube.com": "Youtube", "youtu.be": "Youtube", "googlevideo.com": "Youtube", "ytimg.com": "Youtube",
-    "instagram.com": "Instagram", "cdninstagram.com": "Instagram", "facebook.com": "Facebook", "fbcdn.net": "Facebook",
+    "instagram.com": "Instagram", "cdninstagram.com": "Instagram", "facebook.com": "Facebook",
+    "fbcdn.net": "Facebook", "fb.watch": "Facebook", "threads.com": "Threads", "threads.net": "Threads",
+    "l.threads.net": "Threads", "l.threads.com": "Threads",
     "imgur.com": "Imgur", "tiktok.com": "TikTok", "tiktokcdn.com": "TikTok", "vimeo.com": "Vimeo", "vimeocdn.com": "Vimeo",
     "twitch.tv": "Twitch", "flickr.com": "Flickr", "staticflickr.com": "Flickr", "tumblr.com": "Tumblr",
     "pinterest.com": "Pinterest", "pinimg.com": "Pinterest", "discordapp.com": "Discord", "discordapp.net": "Discord",
-    "bsky.app": "Bluesky", "bsky.network": "Bluesky", "dailymotion.com": "DailyMotion", "soundcloud.com": "Soundcloud",
+    "bsky.app": "Bluesky", "bsky.network": "Bluesky", "bsky.social": "Bluesky",
+    "dailymotion.com": "DailyMotion", "soundcloud.com": "Soundcloud", "sndcdn.com": "Soundcloud",
+    "bandcamp.com": "Bandcamp", "bcbits.com": "Bandcamp",
+    "github.com": "GitHub", "githubusercontent.com": "GitHub", "huggingface.co": "HuggingFace",
+    "gitlab.com": "GitLab", "codeberg.org": "Codeberg",
+    "drive.google.com": "GoogleDrive", "docs.google.com": "GoogleDrive", "googleusercontent.com": "GoogleDrive",
+    "dropbox.com": "Dropbox", "dropboxusercontent.com": "Dropbox",
+    "mediafire.com": "MediaFire", "mega.nz": "MEGA", "pixeldrain.com": "Pixeldrain", "gofile.io": "Gofile",
+    "disk.yandex.com": "YandexDisk", "disk.yandex.ru": "YandexDisk", "yadi.sk": "YandexDisk",
+    "onedrive.live.com": "OneDrive", "1drv.ms": "OneDrive",
+    "archive.org": "Archive", "wikimedia.org": "Wikimedia", "wikipedia.org": "Wikimedia",
+    "bilibili.com": "Bilibili", "b23.tv": "Bilibili", "rumble.com": "Rumble", "kick.com": "Kick",
+    "streamable.com": "Streamable", "loom.com": "Loom", "vk.com": "VK", "vkvideo.ru": "VK",
+    "patreon.com": "Patreon", "pixiv.net": "Pixiv", "pximg.net": "Pixiv",
+    "deviantart.com": "DeviantArt", "wixmp.com": "DeviantArt", "artstation.com": "ArtStation",
+    "kemono.su": "Kemono", "kemono.cr": "Kemono", "kemono.party": "Kemono",
+    "coomer.su": "Coomer", "coomer.st": "Coomer", "coomer.party": "Coomer",
+    "redgifs.com": "RedGifs",
 }
 _NOT_A_SITE = {"Generic", "HTML5MediaEmbed", "HTML5MediaEmbedIE", "GenericIE"}
 
@@ -858,7 +1051,8 @@ def batch_names(items: list[tuple[str, str]]) -> dict[str, str]:
     names, seen = {}, set()
     for url, kind in items:
         u = urllib.parse.urlparse(url)
-        base = sanitize_filename(urllib.parse.unquote(u.path.rsplit("/", 1)[-1])) or "file"
+        tail = u.path.rstrip("/").rsplit("/", 1)[-1]
+        base = sanitize_filename(urllib.parse.unquote(tail)) or "file"
         stem, dot, ext = base.rpartition(".")
         if not dot or not re.fullmatch(r"[A-Za-z0-9]{2,5}", ext):
             fmt = (urllib.parse.parse_qs(u.query).get("format") or [""])[0].lower()
@@ -873,7 +1067,20 @@ def batch_names(items: list[tuple[str, str]]) -> dict[str, str]:
 
 
 def name_pattern(o: "Options") -> str:
-    return f"%(title).150B [%(id)s]{_clip_suffix(o)}.%(ext)s"
+    return f"%(title).120B [%(id).64B]{_clip_suffix(o)}.%(ext)s"
+
+
+def _cap_filename(name: str, max_bytes: int = 230) -> str:
+    """Keep a single path component safely under macOS/POSIX 255-byte filename limits."""
+    raw = name.encode("utf-8", errors="ignore")
+    if len(raw) <= max_bytes:
+        return name
+    stem, dot, ext = name.rpartition(".")
+    if dot and len(ext) <= 10:
+        suffix = "." + ext
+        budget = max(16, max_bytes - len(suffix.encode("utf-8")))
+        return stem.encode("utf-8", errors="ignore")[:budget].decode("utf-8", errors="ignore").rstrip() + suffix
+    return raw[:max_bytes].decode("utf-8", errors="ignore").rstrip()
 
 
 def _sec(t: str) -> float | None:
@@ -927,15 +1134,28 @@ _PROFILE_PATTERNS = [
     (r"(^|\.)reddit\.com$", r"^/(r|u|user)/[^/]+/?((hot|new|top|rising|controversial|submitted|gilded)/?)?$"),
     (r"(^|\.)(x|twitter)\.com$", r"^/(?!i/|home|search|explore|settings|messages|notifications)[^/]+/?(media|likes|with_replies|highlights)?/?$"),
     (r"^bsky\.app$", r"^/profile/[^/]+/?(media|likes)?/?$"),
+    (r"(^|\.)tiktok\.com$", r"^/@[^/]+/photo/\d+"),
+    (r"(^|\.)facebook\.com$", r"^/(media/set|[^/]+/photos|photo/?$)"),
+    (r"^gofile\.io$", r"^/d/[\w-]+"),
+    (r"^pixeldrain\.com$", r"^/(l|d)/[\w-]+"),
+    (r"^catbox\.moe$", r"^/c/[\w-]+"),
+    (r"(^|\.)(bunkr\.[a-z]+|cyberdrop\.[a-z]+|cyberfile\.[a-z]+|saint2\.[a-z]+)$", r"^/(a|album)/"),
+    (r"(^|\.)patreon\.com$", r"^/([^/]+/(posts|collections)|collection/)"),
     (r"(^|\.)(tumblr\.com|pinterest\.[a-z.]+|deviantart\.com|flickr\.com|artstation\.com|pixiv\.net|behance\.net|"
      r"imgur\.com|danbooru\.donmai\.us|gelbooru\.com|furaffinity\.net|newgrounds\.com|kemono\.(su|party|cr)|"
-     r"coomer\.(su|party|st)|redgifs\.com|vsco\.co|threads\.net|mastodon\.social|weibo\.com)$", r""),
+     r"coomer\.(su|party|st)|redgifs\.com|vsco\.co|mastodon\.social|weibo\.com|fanbox\.cc|fantia\.jp|"
+     r"subscribestar\.(com|adult)|misskey\.io|nijie\.info|sankakucomplex\.com|rule34\.xxx|e621\.net|e926\.net|"
+     r"paheal\.net|safebooru\.org|yande\.re|konachan\.(com|net)|zerochan\.net)$", r""),
 ]
 
 
 def prefers_gallery(url: str) -> bool:
     p = urllib.parse.urlsplit(url)
-    host, path = (p.hostname or "").lower().removeprefix("www.").removeprefix("old."), p.path or "/"
+    host = (p.hostname or "").lower()
+    for prefix in ("www.", "old.", "new.", "sh.", "np.", "mobile.", "m."):
+        if host.startswith(prefix):
+            host = host[len(prefix):]
+    path = p.path or "/"
     return any(re.search(h, host) and re.search(pth, path) for h, pth in _PROFILE_PATTERNS)
 
 
@@ -968,7 +1188,7 @@ def friendly_name(url: str) -> str:
         return f"{parts[0]} ({'YouTube' if site == 'Youtube' else site})"
     if host.endswith("instagram.com") and parts and parts[0] in ("p", "reel", "reels", "tv"):
         return "Instagram post"
-    if host.endswith(("instagram.com", "x.com", "twitter.com", "tiktok.com", "threads.net")) and parts:
+    if host.endswith(("instagram.com", "x.com", "twitter.com", "tiktok.com", "threads.net", "threads.com")) and parts:
         return f"@{parts[0].lstrip('@')} ({site})"
     if site == "Youtube":
         q = urllib.parse.parse_qs(p.query)
@@ -984,6 +1204,210 @@ def _ext(url: str) -> str:
     return path.rsplit(".", 1)[-1].lower() if "." in path.rsplit("/", 1)[-1] else ""
 
 
+def _archive_path(out_dir: str) -> Path:
+    return Path(out_dir) / ".grab-archive.txt"
+
+
+def _in_archive(out_dir: str, archive_id: str) -> bool:
+    p = _archive_path(out_dir)
+    if not archive_id or not p.is_file():
+        return False
+    try:
+        return archive_id in p.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return False
+
+
+def _record_archive(out_dir: str, archive_id: str) -> None:
+    if not archive_id:
+        return
+    p = _archive_path(out_dir)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if not _in_archive(out_dir, archive_id):
+        with p.open("a", encoding="utf-8") as f:
+            f.write(archive_id + "\n")
+
+
+def _write_temp_cookies(cookies_text: str, prefix: str = "sniff-") -> str | None:
+    """Write Netscape cookie-jar text to a private 0o600 temp file inside logins/."""
+    if not cookies_text:
+        return None
+    d = state_dir() / "logins"
+    d.mkdir(parents=True, exist_ok=True)
+    os.chmod(d, 0o700)
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=".txt", dir=d)
+    os.close(fd)
+    os.chmod(path, 0o600)
+    Path(path).write_text(cookies_text, encoding="utf-8")
+    return path
+
+
+def _download_item(
+    job: Job,
+    mgr: Manager | None,
+    item: ExtractedItem,
+    res: ExtractionResult,
+    cookie_file: str | None,
+) -> None:
+    """Download a single ExtractedItem via yt-dlp (including inline DASH MPD) or direct HTTP."""
+    import hashlib
+
+    o = job.opts
+    if item.archive_id and o.archive and not o.clip and _in_archive(o.out_dir, item.archive_id):
+        job.status = "skipped"
+        job.stage = "already downloaded"
+        job.progress = 100.0
+        return
+
+    hdrs = dict(item.headers or {})
+    hdrs.setdefault("Referer", o.referer or job.url)
+    title_ov = item.title or res.title or o.title or ""
+    if item.archive_id.startswith("threads "):
+        id_ov = item.archive_id.split(" ", 1)[1]
+    else:
+        id_ov = hashlib.sha1((item.url or job.url).encode()).hexdigest()[:8]
+
+    before_files = list(job.files)
+    site_key_ov = res.site or None
+    custom_arch = bool(item.archive_id)
+
+    if item.dash_xml:
+        with tempfile.TemporaryDirectory(prefix="grab-mpd-") as tmpdir:
+            mpd_path = Path(tmpdir) / "manifest.mpd"
+            mpd_path.write_text(item.dash_xml, encoding="utf-8")
+            try:
+                run_ytdlp(
+                    job, mgr,
+                    target_url=mpd_path.as_uri(),
+                    out_site_key=site_key_ov,
+                    extra_cookie_file=cookie_file,
+                    extra_headers=hdrs,
+                    title_override=title_ov,
+                    id_override=id_ov,
+                    allow_file_urls=True,
+                    disable_archive=custom_arch,
+                )
+            except DownloadCancelled:
+                raise
+            except Exception as dash_err:  # noqa: BLE001
+                if not item.fallback_url:
+                    raise
+                job.note(f"[grab] DASH manifest failed ({_clean_err(dash_err)}), trying progressive video")
+                job.files = list(before_files)
+                job.progress = None
+                run_ytdlp(
+                    job, mgr,
+                    target_url=item.fallback_url,
+                    out_site_key=site_key_ov,
+                    extra_cookie_file=cookie_file,
+                    extra_headers=hdrs,
+                    title_override=title_ov,
+                    id_override=id_ov,
+                    disable_archive=custom_arch,
+                )
+    elif item.kind in ("stream", "video", "audio"):
+        try:
+            run_ytdlp(
+                job, mgr,
+                target_url=item.url,
+                out_site_key=site_key_ov,
+                extra_cookie_file=cookie_file,
+                extra_headers=hdrs,
+                title_override=title_ov,
+                id_override=id_ov,
+                disable_archive=custom_arch,
+            )
+        except DownloadCancelled:
+            raise
+        except Exception as yt_item_err:  # noqa: BLE001
+            if item.kind == "stream" or o.clip or (o.mode == "audio" and item.kind != "audio") or classify(str(yt_item_err)) == "gone":
+                raise
+            job.note(f"[grab] yt-dlp couldn't fetch media ({_clean_err(yt_item_err)}) -> direct download")
+            job.files = list(before_files)
+            job.progress = None
+            run_direct(
+                job, mgr,
+                target_url=item.url,
+                extra_cookie_file=cookie_file,
+                extra_headers=hdrs,
+                dest_site=site_key_ov,
+                title_override=title_ov,
+            )
+    else:
+        run_direct(
+            job, mgr,
+            target_url=item.url,
+            extra_cookie_file=cookie_file,
+            extra_headers=hdrs,
+            dest_site=site_key_ov,
+            title_override=title_ov,
+        )
+
+    if item.archive_id and o.archive and not o.clip and job.status == "done":
+        _record_archive(o.out_dir, item.archive_id)
+
+
+def _download_extracted(job: Job, mgr: Manager | None, res: ExtractionResult) -> None:
+    """Download single items, Threads carousels, or multi-file pages from ExtractionResult."""
+    o = job.opts
+    if res.site:
+        job.site = res.site
+    if res.title and not job.title:
+        job.title = res.title
+
+    items = list(res.items)
+    if res.site != "Threads" and len(items) > 1:
+        items = _pick(items, o.items or (f"1-{o.scan}" if o.scan else ""))
+        if not items:
+            raise RuntimeError("No items matched your selection range")
+
+    if len(items) > 1 and res.site != "Threads" and mgr is not None:
+        sub = o.subfolder or sanitize_filename(res.title or site_folder(job.url))
+        page_cookie = _write_temp_cookies(res.cookies_text, prefix=f"page-{job.id}-") if (res.cookies_text and not o.cookies_file) else None
+        child_opts = dataclasses.replace(
+            o,
+            items="",
+            subfolder=sub,
+            referer=o.referer or job.url,
+            cookies_file=page_cookie or o.cookies_file,
+        )
+        urls = [it.url for it in items]
+        titles = {it.url: it.title for it in items if it.title}
+        kids = mgr.add(urls, child_opts, parent=job.id, front=True, titles=titles)
+        for k, it in zip(kids, items):
+            k.title = it.title or k.title
+        job.children = len(kids)
+        job.stage = f"page · {len(kids)} files"
+        job.progress = 100.0
+        job.status = "done"
+        return
+
+    tmp_cookie = _write_temp_cookies(res.cookies_text)
+    try:
+        all_files: list[str] = []
+        skipped_all = True
+        for idx, item in enumerate(items, 1):
+            if len(items) > 1:
+                job.stage = f"item {idx}/{len(items)}"
+            job.files = []
+            _download_item(job, mgr, item, res, tmp_cookie)
+            if job.status != "skipped":
+                skipped_all = False
+            for f in job.files:
+                if f not in all_files:
+                    all_files.append(f)
+        job.files = all_files
+        if res.title:
+            job.title = res.title
+        job.status = "skipped" if skipped_all and not all_files else "done"
+        job.stage = "already downloaded" if job.status == "skipped" else ""
+        job.progress = 100.0
+        _image_thumb(job)
+    finally:
+        if tmp_cookie:
+            Path(tmp_cookie).unlink(missing_ok=True)
+
+
 def run_job(job: Job, mgr: Manager):
     o = job.opts
     Path(o.out_dir).mkdir(parents=True, exist_ok=True)
@@ -992,9 +1416,31 @@ def run_job(job: Job, mgr: Manager):
     if real != job.url:
         job.note(f"[grab] unwrapped link: {job.url} -> {real}")
         job.url, job.site = real, site_key(real)
+    unranged = strip_byte_range(job.url)
+    if unranged != job.url:
+        job.note(f"[grab] stripped CDN byte-range query -> {unranged}")
+        job.url = unranged
 
     if o.mode == "direct" or (o.mode == "auto" and _ext(job.url) in DIRECT_EXTS):
         return run_direct(job, mgr)
+    if is_threads_url(job.url) and o.mode != "images":
+        job.tool = "grab"
+        job.stage = "extracting Threads post"
+        with login_for(o) as (cookie_file, _b):
+            res = extract_media(
+                job.url, mode=o.mode, cookie_file=cookie_file, referer=o.referer,
+                cancel_event=job.cancel_event, note=job.note,
+            )
+        if res.items:
+            return _download_extracted(job, mgr, res)
+        if res.drm:
+            raise RuntimeError(f"{res.drm} — Grab can't download DRM-protected streams.")
+        login_hint = (
+            "\nTip: if this Threads post is private or rate-limited, choose your browser under 'Logged-in cookies' (or share logins from the extension)."
+            if not cookie_file else ""
+        )
+        raise RuntimeError((res.error or "Threads: no downloadable media found at this post") + login_hint)
+
     if o.mode == "images":
         return run_gallery_smart(job)
     if o.mode == "auto" and prefers_gallery(job.url):
@@ -1004,7 +1450,7 @@ def run_job(job: Job, mgr: Manager):
         except DownloadCancelled:
             raise
         except Exception as e:  # noqa: BLE001
-            if job.cancel_event.is_set():
+            if job.cancel_event.is_set() or classify(str(e)) == "gone":
                 raise
             gdl_first = str(e)
             job.note(f"gallery-dl: {gdl_first} -> trying yt-dlp")
@@ -1014,7 +1460,21 @@ def run_job(job: Job, mgr: Manager):
             except DownloadCancelled:
                 raise
             except Exception as e2:  # noqa: BLE001
-                raise RuntimeError(f"gallery-dl: {gdl_first}\nyt-dlp: {_clean_err(e2)}" + _tip(gdl_first + " " + str(e2))) from None
+                yt_second = _clean_err(e2)
+                if job.cancel_event.is_set() or classify(yt_second) == "gone":
+                    raise RuntimeError(yt_second + _tip(yt_second)) from None
+                job.note(f"yt-dlp: {yt_second} -> trying page extraction")
+                job.files, job.progress = [], None
+                with login_for(o) as (cookie_file, _b):
+                    res = extract_media(
+                        job.url, mode=o.mode, cookie_file=cookie_file, referer=o.referer,
+                        cancel_event=job.cancel_event, note=job.note,
+                    )
+                if res.drm and not res.items:
+                    raise RuntimeError(f"{res.drm} — Grab can't download DRM-protected streams.") from None
+                if res.items:
+                    return _download_extracted(job, mgr, res)
+                raise RuntimeError(f"gallery-dl: {gdl_first}\nyt-dlp: {yt_second}" + _tip(gdl_first + " " + yt_second)) from None
 
     try:
         return run_ytdlp_smart(job, mgr)
@@ -1022,14 +1482,15 @@ def run_job(job: Job, mgr: Manager):
         raise
     except Exception as e:  # noqa: BLE001
         yt_err = _clean_err(e)
-        if job.cancel_event.is_set() or o.mode in ("video", "audio") or classify(yt_err) == "gone" or o.clip:
-            # (gallery-dl / plain downloads can't cut a clip: better to fail than to quietly fetch everything)
+        if job.cancel_event.is_set() or classify(yt_err) in ("gone", "bot"):
+            raise RuntimeError(yt_err + _tip(yt_err)) from None
+        if not o.smart and (o.mode in ("video", "audio") or o.clip) and classify(yt_err) != "novideo":
             raise RuntimeError(yt_err + _tip(yt_err)) from None
         job.note(f"yt-dlp: {yt_err}")
 
     # yt-dlp found no video -> image/gallery post?
     gdl_err = ""
-    if GALLERY_DL:
+    if GALLERY_DL and o.mode not in ("video", "audio") and not o.clip:
         job.progress = None
         try:
             return run_gallery_smart(job)
@@ -1039,10 +1500,34 @@ def run_job(job: Job, mgr: Manager):
             gdl_err = str(e)
             job.note(f"gallery-dl: {gdl_err}")
 
-    # Last resort: a raw file that isn't a web page.
-    ctype = _content_type(job.url, o)
-    if ctype and "html" not in ctype:
-        return run_direct(job, mgr)
+    # Direct raw file (when not restricted to video/audio/clip slicing).
+    if o.mode not in ("video", "audio") and not o.clip:
+        ctype = _content_type(job.url, o)
+        if ctype and "html" not in ctype:
+            return run_direct(job, mgr)
+
+    # Universal HTML / JS / iframe / headless Chromium CDP extraction fallback.
+    job.progress = None
+    job.stage = "extracting page media"
+    with login_for(o) as (cookie_file, _b):
+        res = extract_media(
+            job.url, mode=o.mode, cookie_file=cookie_file, referer=o.referer,
+            cancel_event=job.cancel_event, note=job.note,
+        )
+    if res.is_direct_content:
+        if not o.smart and (o.mode in ("video", "audio") or o.clip):
+            raise RuntimeError(yt_err + _tip(yt_err)) from None
+        if not o.clip and o.mode != "audio":
+            tmp_c = _write_temp_cookies(res.cookies_text)
+            try:
+                return run_direct(job, mgr, target_url=res.url, extra_cookie_file=tmp_c)
+            finally:
+                if tmp_c:
+                    Path(tmp_c).unlink(missing_ok=True)
+    if res.drm and not res.items:
+        raise RuntimeError(f"{res.drm} — Grab can't download DRM-protected streams.")
+    if res.items and not (o.clip and all(it.kind in ("file", "image") for it in res.items)):
+        return _download_extracted(job, mgr, res)
 
     lines = [f"yt-dlp: {yt_err}"] + ([f"gallery-dl: {gdl_err}"] if gdl_err else [])
     raise RuntimeError("\n".join(lines) + _tip(yt_err + " " + gdl_err))
@@ -1122,6 +1607,11 @@ def _use_native(p: dict):
     p["http_chunk_size"] = 10 * 1024 * 1024
 
 
+def _use_impersonate(p: dict):
+    from yt_dlp.networking.impersonate import ImpersonateTarget
+    p["impersonate"] = ImpersonateTarget.from_str("chrome")
+
+
 # name -> (label shown in the UI, how it changes the yt-dlp options)
 STRATEGIES = {
     "gentle": ("fewer connections", lambda p: p.update(
@@ -1129,6 +1619,7 @@ STRATEGIES = {
         sleep_interval_requests=0.75, socket_timeout=60)),
     "client": ("another YouTube player", lambda p: p.update(
         extractor_args={"youtube": {"player_client": ["tv", "web_safari", "mweb"]}})),
+    "impersonate": ("browser TLS", _use_impersonate),
     "aria2": ("aria2c multi-connection", lambda p: (_use_aria2(p, 4), p.update(continuedl=False))),
     "native": ("built-in downloader", lambda p: (_use_native(p), p.update(continuedl=False))),
     "simple": ("simpler format", lambda p: p.update(
@@ -1142,10 +1633,10 @@ def ladder(kind: str, job: Job, tried: list[str]) -> list[str]:
     switch_dl = "native" if (o.aria2_streams and ARIA2C) else ("aria2" if ARIA2C else None)
     yt = "client" if _is_youtube(job.url) else None
     order = {
-        "network": ["gentle", yt, switch_dl, "simple"],
+        "network": ["gentle", yt, "impersonate", switch_dl, "simple"],
         "bot": [],  # other YouTube players only offer 360p without a login; the fix is a browser login
-        "format": ["simple", yt],
-        "other": ["gentle", yt],
+        "format": ["simple", yt, "impersonate"],
+        "other": ["gentle", yt, "impersonate"],
     }.get(kind, [])
     return [s for s in order if s and s not in tried]
 
@@ -1401,14 +1892,22 @@ COMPATIBLE_VIDEO = {"h264", "hevc", "mpeg4", "prores", "mjpeg"}
 
 def _probe(path: str) -> dict:
     r = subprocess.run([shutil.which("ffprobe") or "ffprobe", "-v", "error", "-show_entries",
-                        "stream=index,codec_type,codec_name,pix_fmt,color_transfer,color_primaries,color_space,disposition:format=duration",
+                        "stream=index,codec_type,codec_name,codec_tag_string,pix_fmt,color_transfer,color_primaries,color_space,disposition:format=duration",
                         "-of", "json", path], capture_output=True, text=True, timeout=60)
     return json.loads(r.stdout or "{}")
 
 
+_COMPATIBLE_AUDIO = {"aac", "mp3", "alac", "ac3", "eac3"}
+_TEXT_SUBS = {"subrip", "ass", "ssa", "webvtt", "mov_text", "srt", "text"}
+_COMPATIBLE_CONTAINERS = {".mp4", ".m4v", ".mov"}
+_VIDEO_COMPAT_EXTS = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".flv", ".ts", ".ogv"}
+
+
 def make_compatible(job: Job, path: str) -> str:
-    """AV1/VP9 video -> HEVC (hardware encoder on Macs) in MP4, keeping resolution, HDR, audio, chapters,
-    subtitles and the cover image. Anything already H.264/HEVC is left untouched. Returns the new path."""
+    """Ensure video is QuickTime/Apple-compatible H.264/HEVC in MP4:
+    - AV1/VP9/etc. (or 10-bit/4:2:2/4:4:4 H.264) -> HEVC (VideoToolbox on macOS)
+    - Wrong container (.mkv/.webm/.ts/...) or Opus/FLAC/Vorbis audio or hev1 tag -> fast remux / audio-only AAC
+    Keeps compatible H.264/HEVC MP4 untouched. Returns the new path."""
     if not FFMPEG or not os.path.isfile(path):
         return path
     try:
@@ -1417,30 +1916,64 @@ def make_compatible(job: Job, path: str) -> str:
         return path
     streams = info.get("streams") or []
     video = next((s for s in streams if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")), None)
-    if not video or video.get("codec_name") in COMPATIBLE_VIDEO:
+    if not video:
         return path
+    vcodec = (video.get("codec_name") or "").lower()
+    pix = (video.get("pix_fmt") or "").lower()
+    vtag = (video.get("codec_tag_string") or "").lower()
+    audio = [s for s in streams if s.get("codec_type") == "audio"]
+    suffix = Path(path).suffix.lower()
+
+    need_v_transcode = (
+        vcodec not in COMPATIBLE_VIDEO
+        or (vcodec == "h264" and pix not in ("", "yuv420p", "yuvj420p", "nv12"))
+        or (vcodec == "hevc" and ("422" in pix or "444" in pix))
+    )
+    need_v_tag_fix = not need_v_transcode and vcodec == "hevc" and vtag != "hvc1"
+    need_a_transcode = any((s.get("codec_name") or "").lower() not in _COMPATIBLE_AUDIO for s in audio)
+    need_container = suffix not in _COMPATIBLE_CONTAINERS
+    if not (need_v_transcode or need_v_tag_fix or need_a_transcode or need_container):
+        return path
+
     duration = float((info.get("format") or {}).get("duration") or 0)
-    ten_bit = "10" in (video.get("pix_fmt") or "") or "12" in (video.get("pix_fmt") or "")
+    ten_bit = "10" in pix or "12" in pix
     vt = "hevc_videotoolbox" if sys.platform == "darwin" else "libx265"
     vi = video["index"]
     out = str(Path(path).with_suffix("")) + ".compatible.mp4"
-    cmd = [FFMPEG, "-v", "error", "-y", "-i", path, "-map", "0", "-map_metadata", "0", "-map_chapters", "0", "-c", "copy",
-           f"-c:{vi}", vt, f"-tag:{vi}", "hvc1"]
-    if vt == "hevc_videotoolbox":
-        cmd += [f"-q:{vi}", "62", f"-profile:{vi}", "main10" if ten_bit else "main", f"-pix_fmt:{vi}", "p010le" if ten_bit else "nv12"]
-    else:
-        cmd += [f"-crf:{vi}", "20", f"-pix_fmt:{vi}", "yuv420p10le" if ten_bit else "yuv420p"]
-    for key, flag in (("color_primaries", "-color_primaries"), ("color_transfer", "-color_trc"), ("color_space", "-colorspace")):
-        if video.get(key) and video[key] != "unknown":
-            cmd += [f"{flag}:{vi}", video[key]]  # keep HDR looking right
-    audio = [s for s in streams if s.get("codec_type") == "audio"]
-    if any(s.get("codec_name") not in ("aac", "mp3", "alac", "ac3", "eac3") for s in audio):  # Opus in MP4 won't play in QuickTime
+    cmd = [FFMPEG, "-v", "error", "-y", "-i", path, "-map", f"0:{vi}"]
+    for s in streams:
+        if s.get("codec_type") == "video" and (s.get("disposition") or {}).get("attached_pic") and (s.get("codec_name") or "").lower() in ("mjpeg", "png"):
+            cmd += ["-map", f"0:{s['index']}"]
+    if audio:
+        cmd += ["-map", "0:a"]
+    text_subs = [s for s in streams if s.get("codec_type") == "subtitle" and (s.get("codec_name") or "").lower() in _TEXT_SUBS]
+    for s in text_subs:
+        cmd += ["-map", f"0:{s['index']}"]
+    cmd += ["-map_metadata", "0", "-map_chapters", "0", "-c", "copy"]
+
+    if need_v_transcode:
+        cmd += ["-c:v:0", vt, "-tag:v:0", "hvc1"]
+        if vt == "hevc_videotoolbox":
+            cmd += ["-q:v:0", "62", "-profile:v:0", "main10" if ten_bit else "main", "-pix_fmt:v:0", "p010le" if ten_bit else "nv12"]
+        else:
+            cmd += ["-crf:v:0", "20", "-pix_fmt:v:0", "yuv420p10le" if ten_bit else "yuv420p"]
+        for key, flag in (("color_primaries", "-color_primaries"), ("color_transfer", "-color_trc"), ("color_space", "-colorspace")):
+            if video.get(key) and video[key] != "unknown":
+                cmd += [f"{flag}:v:0", video[key]]  # keep HDR looking right
+    elif need_v_tag_fix:
+        cmd += ["-tag:v:0", "hvc1"]
+
+    if need_a_transcode:
         cmd += ["-c:a", "aac", "-b:a", "256k"]
-    subs = [s for s in streams if s.get("codec_type") == "subtitle"]
-    if subs:
-        cmd += ["-c:s", "mov_text"]
+    elif suffix in (".ts", ".m2ts", ".aac") and any((s.get("codec_name") or "").lower() == "aac" for s in audio):
+        cmd += ["-bsf:a", "aac_adtstoasc"]
+
+    for out_si, s in enumerate(text_subs):
+        if (s.get("codec_name") or "").lower() != "mov_text":
+            cmd += [f"-c:s:{out_si}", "mov_text"]
+
     cmd += ["-movflags", "+faststart", "-progress", "pipe:1", "-nostats", out]
-    job.stage = f"making it compatible: {video.get('codec_name', '').upper()} → HEVC"
+    job.stage = f"making it compatible: {vcodec.upper()} → HEVC" if need_v_transcode else "remuxing to compatible MP4"
     job.progress, job.speed, job.eta = 0.0, None, None
     job.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     t0 = time.time()
@@ -1464,13 +1997,16 @@ def make_compatible(job: Job, path: str) -> str:
         raise DownloadCancelled()
     if rc != 0 or not os.path.isfile(out):
         Path(out).unlink(missing_ok=True)
-        job.note(f"[grab] couldn't convert to HEVC, kept the original: {err.strip()[-300:]}")
+        job.note(f"[grab] couldn't make compatible MP4, kept the original: {err.strip()[-300:]}")
         return path
     final = str(Path(path).with_suffix(".mp4"))
     os.replace(out, final)
     if final != path:
         Path(path).unlink(missing_ok=True)
-    job.note(f"[grab] converted {video.get('codec_name')} → HEVC for compatibility")
+    if need_v_transcode:
+        job.note(f"[grab] converted {vcodec} → HEVC for compatibility")
+    else:
+        job.note(f"[grab] remuxed to compatible MP4 ({vcodec})")
     job.progress = 100.0
     return final
 
@@ -1509,7 +2045,20 @@ def _meta(job: Job, info: dict):
         job.title = job.opts.title  # raw stream: its own title is just "master"/"index"
 
 
-def run_ytdlp(job: Job, mgr: Manager, strategy: str | None = None):
+def run_ytdlp(
+    job: Job,
+    mgr: Manager | None,
+    strategy: str | None = None,
+    *,
+    target_url: str | None = None,
+    out_site_key: str | None = None,
+    extra_cookie_file: str | None = None,
+    extra_headers: dict | None = None,
+    title_override: str | None = None,
+    id_override: str | None = None,
+    allow_file_urls: bool = False,
+    disable_archive: bool = False,
+):
     job.tool = "yt-dlp"
     o0 = job.opts
     job.min_height = None
@@ -1518,47 +2067,73 @@ def run_ytdlp(job: Job, mgr: Manager, strategy: str | None = None):
     if not job.stage.startswith("retrying"):
         job.stage = "extracting"
     o = job.opts
-    with login_for(o) as login, yt_dlp.YoutubeDL(ytdlp_options(job, strategy, login)) as ydl:
-        info = ydl.extract_info(job.url, download=False, process=False)
-        if info is None:
-            if job.status == "skipped":  # yt-dlp found it in the download archive
-                job.progress = 100.0
-                return
-            raise RuntimeError("extraction returned nothing")
-        _meta(job, info)
-        # now that we know the site, point the output at its folder (yt-dlp reads this when naming files)
-        sub = sanitize_filename(o.subfolder) if (o.subfolder and o.folders != "none") else ""
-        key = info.get("extractor_key") or info.get("ie_key")
-        name = (_hint_name(o, job.url) if key in _NOT_A_SITE or key is None else None) or name_pattern(o)
-        if o.title and (key in _NOT_A_SITE or key is None):
-            job.title = o.title
-        ydl.params["outtmpl"]["default"] = os.path.join(target_dir(o, job.url, key), sub, name)
+    fetch_url = target_url or job.url
+    with login_for(o) as login:
+        params = ytdlp_options(job, strategy, login)
+        if allow_file_urls:
+            params["enable_file_urls"] = True
+        if extra_cookie_file:
+            params["cookiefile"] = extra_cookie_file
+        if extra_headers:
+            merged_hdrs = dict(params.get("http_headers") or {})
+            merged_hdrs.update(extra_headers)
+            ref = next((v for k, v in merged_hdrs.items() if k.lower() == "referer"), "")
+            if ref and not any(k.lower() == "origin" for k in merged_hdrs):
+                rp = urllib.parse.urlparse(ref)
+                if rp.scheme and rp.netloc:
+                    merged_hdrs["Origin"] = f"{rp.scheme}://{rp.netloc}"
+            params["http_headers"] = merged_hdrs
+        if disable_archive:
+            params.pop("download_archive", None)
+        with yt_dlp.YoutubeDL(params) as ydl:
+            info = ydl.extract_info(fetch_url, download=False, process=False)
+            if info is None:
+                if job.status == "skipped":  # yt-dlp found it in the download archive
+                    job.progress = 100.0
+                    return
+                raise RuntimeError("extraction returned nothing")
+            _meta(job, info)
+            if title_override:
+                job.title = title_override
+                info["title"] = title_override
+            if id_override:
+                info["id"] = id_override
+            # now that we know the site, point the output at its folder (yt-dlp reads this when naming files)
+            sub = sanitize_filename(o.subfolder) if (o.subfolder and o.folders != "none") else ""
+            key = out_site_key or info.get("extractor_key") or info.get("ie_key")
+            if out_site_key:
+                job.site = out_site_key.replace("Tab", "")
+            hint_opts = dataclasses.replace(o, title=title_override or o.title) if (title_override and not o.title) else o
+            name = (_hint_name(hint_opts, job.url) if key in _NOT_A_SITE or key is None else None) or name_pattern(o)
+            if o.title and (key in _NOT_A_SITE or key is None):
+                job.title = o.title
+            ydl.params["outtmpl"]["default"] = os.path.join(target_dir(o, job.url, key), sub, name)
 
-        # Fan playlists/channels out into separate jobs so they download in parallel.
-        if info.get("_type") in ("playlist", "multi_video"):
-            entries = _pick(info.get("entries") or [], o.items or (f"1-{o.scan}" if o.scan else ""))
-            info["entries"] = entries
-            urls = [e.get("url") for e in entries if e and e.get("_type") in ("url", "url_transparent")]
-            if o.expand_playlists and len(entries) > 1 and len(urls) == len(entries):
-                child = dataclasses.replace(o, items="", subfolder=info.get("title") or info.get("id") or "playlist")
-                titles = {unwrap_url(e["url"]): e.get("title") or "" for e in entries if e.get("url")}
-                kids = mgr.add(urls, child, parent=job.id, front=True, titles=titles)
-                if not job.thumbnail:
-                    first = entries[0] or {}
-                    job.thumbnail = (first.get("thumbnails") or [{}])[-1].get("url", "") or first.get("thumbnail", "")
-                for k, e in zip(kids, entries):
-                    k.title = e.get("title") or ""
-                    k.duration = e.get("duration")
-                    k.thumbnail = (e.get("thumbnails") or [{}])[-1].get("url", "") or e.get("thumbnail") or ""
-                    k.uploader = e.get("uploader") or e.get("channel") or job.uploader
-                    k.site = job.site
-                job.children = len(kids)
-                job.stage = f"playlist · {len(urls)} items"
-                job.progress = 100.0
-                job.status = "done"
-                return
+            # Fan playlists/channels out into separate jobs so they download in parallel.
+            if info.get("_type") in ("playlist", "multi_video"):
+                entries = _pick(info.get("entries") or [], o.items or (f"1-{o.scan}" if o.scan else ""))
+                info["entries"] = entries
+                urls = [e.get("url") for e in entries if e and e.get("_type") in ("url", "url_transparent")]
+                if o.expand_playlists and len(entries) > 1 and len(urls) == len(entries):
+                    child = dataclasses.replace(o, items="", subfolder=info.get("title") or info.get("id") or "playlist")
+                    titles = {unwrap_url(e["url"]): e.get("title") or "" for e in entries if e.get("url")}
+                    kids = mgr.add(urls, child, parent=job.id, front=True, titles=titles)
+                    if not job.thumbnail:
+                        first = entries[0] or {}
+                        job.thumbnail = (first.get("thumbnails") or [{}])[-1].get("url", "") or first.get("thumbnail", "")
+                    for k, e in zip(kids, entries):
+                        k.title = e.get("title") or ""
+                        k.duration = e.get("duration")
+                        k.thumbnail = (e.get("thumbnails") or [{}])[-1].get("url", "") or e.get("thumbnail") or ""
+                        k.uploader = e.get("uploader") or e.get("channel") or job.uploader
+                        k.site = job.site
+                    job.children = len(kids)
+                    job.stage = f"playlist · {len(urls)} items"
+                    job.progress = 100.0
+                    job.status = "done"
+                    return
 
-        ydl.process_ie_result(info, download=True)
+            ydl.process_ie_result(info, download=True)
 
     if o.compat and o.mode != "audio" and job.status == "running":
         job.files = [make_compatible(job, f) for f in job.files]
@@ -1683,26 +2258,44 @@ def _eta(s: str | None) -> int | None:
     return total
 
 
-def run_direct(job: Job, mgr: Manager | None = None):
+def run_direct(
+    job: Job,
+    mgr: Manager | None = None,
+    *,
+    target_url: str | None = None,
+    extra_cookie_file: str | None = None,
+    extra_headers: dict | None = None,
+    dest_site: str | None = None,
+    title_override: str | None = None,
+):
     o = job.opts
+    effective_url = target_url or resolve_file_host(job.url) or job.url
     site = site_key(job.url)
-    out = Path(target_dir(o, job.url))
+    out = Path(target_dir(o, job.url, dest_site))
     if o.subfolder and o.folders != "none":  # e.g. everything from one page goes in a folder named after it
         out = out / sanitize_filename(o.subfolder)
     out.mkdir(parents=True, exist_ok=True)
     job.tool = "aria2c" if (o.aria2 and ARIA2C) else "http"
     job.stage = "downloading"
+    if title_override and not job.title:
+        job.title = title_override
     if not job.title:
-        job.title = o.title or urllib.parse.unquote(urllib.parse.urlparse(job.url).path.rsplit("/", 1)[-1]) or job.url
-    if job.tool == "aria2c":
+        job.title = o.title or urllib.parse.unquote(urllib.parse.urlparse(effective_url).path.rsplit("/", 1)[-1]) or job.url
+    with login_for(o) as (login_cookie, _browser):
+        cookie_file = extra_cookie_file or login_cookie
         try:
-            return _direct_aria2_with_fallback(job, out, mgr, o, site)
+            if job.tool == "aria2c":
+                _direct_aria2_with_fallback(
+                    job, out, mgr, o, site, url=effective_url, cookie_file=cookie_file, extra_headers=extra_headers
+                )
+            else:
+                _direct_http(job, out, url=effective_url, cookie_file=cookie_file, extra_headers=extra_headers)
+            if job.status == "done" and o.compat and o.mode != "direct":
+                for i, f in enumerate(list(job.files)):
+                    if Path(f).suffix.lower() in _VIDEO_COMPAT_EXTS:
+                        job.files[i] = make_compatible(job, f)
         finally:
             _image_thumb(job)
-    try:
-        return _direct_http(job, out)
-    finally:
-        _image_thumb(job)
 
 
 def _image_thumb(job: Job):
@@ -1713,13 +2306,23 @@ def _image_thumb(job: Job):
             return
 
 
-def _direct_aria2_with_fallback(job: Job, out: Path, mgr, o: Options, site: str):
+def _direct_aria2_with_fallback(
+    job: Job,
+    out: Path,
+    mgr,
+    o: Options,
+    site: str,
+    *,
+    url: str | None = None,
+    cookie_file: str | None = None,
+    extra_headers: dict | None = None,
+):
     """aria2c with many connections, then 1 connection (some servers refuse more), then plain HTTP."""
     err = None
     first = 1 if (mgr and o.smart and mgr.learned.get("direct:" + site) == "one-connection") else max(1, min(16, o.aria2_conns))
     for conns in dict.fromkeys((first, 1)):
         try:
-            _direct_aria2(job, out, conns)
+            _direct_aria2(job, out, conns, url=url, cookie_file=cookie_file, extra_headers=extra_headers)
             if conns == 1 and first != 1:
                 job.strategy = "1 connection"
                 if mgr and o.smart:
@@ -1734,29 +2337,40 @@ def _direct_aria2_with_fallback(job: Job, out: Path, mgr, o: Options, site: str)
     job.tool = "http"
     job.strategy = "plain HTTP"
     try:
-        return _direct_http(job, out)
+        return _direct_http(job, out, url=url, cookie_file=cookie_file, extra_headers=extra_headers)
     except DownloadCancelled:
         raise
     except Exception as e:  # noqa: BLE001
         raise RuntimeError(f"{err}; plain HTTP: {e}") from None
 
 
-def _direct_aria2(job: Job, out: Path, conns: int):
+def _direct_aria2(
+    job: Job,
+    out: Path,
+    conns: int,
+    *,
+    url: str | None = None,
+    cookie_file: str | None = None,
+    extra_headers: dict | None = None,
+):
     o = job.opts
+    hdrs = _headers(o)
+    if extra_headers:
+        hdrs.update(extra_headers)
     n = str(conns)
     job.stage = f"downloading ({conns} connection{'s' if conns > 1 else ''})"
     cmd = [ARIA2C, f"-x{n}", f"-s{n}", "-k1M", "-c", "--file-allocation=none", "--summary-interval=1",
            "--console-log-level=notice", "--show-console-readout=true", "--auto-file-renaming=false",
            "--allow-overwrite=false", "--content-disposition-default-utf8=true", "-d", str(out)]
-    for k, v in _headers(o).items():
+    for k, v in hdrs.items():
         cmd.append(f"--header={k}: {v}")
     if o.rate_limit:
         cmd.append(f"--max-download-limit={o.rate_limit}")
-    if o.cookies_file:
-        cmd.append(f"--load-cookies={o.cookies_file}")
+    if cookie_file:
+        cmd.append(f"--load-cookies={cookie_file}")
     if job.proxy:
         cmd.append(f"--all-proxy={job.proxy}")
-    cmd.append(job.url)
+    cmd.append(url or job.url)
     job.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     buf, tail = b"", collections.deque(maxlen=20)
     while True:
@@ -1795,35 +2409,114 @@ def _direct_aria2(job: Job, out: Path, conns: int):
             return
         detail = next((l.split("errorCode=", 1)[-1] for l in reversed(tail) if l.startswith("->")), "")
         raise RuntimeError(f"aria2c: {re.sub(r'^\d+\s*', '', detail) or f'exit code {rc}'}")
+    if job.files:
+        saved = Path(job.files[-1])
+        if saved.is_file() and saved.stat().st_size <= 512 * 1024:
+            with saved.open("rb") as f:
+                head = f.read(4096).lstrip().lower()
+            if head.startswith((b"<!doctype html", b"<html")):
+                is_gdrive = bool(extract_google_drive_confirm(saved.read_text("utf-8", "replace"), url or job.url))
+                if job.opts.mode != "direct" or is_gdrive:
+                    saved.unlink(missing_ok=True)
+                    job.files.clear()
+                    job.status, job.progress = "downloading", None
+                    raise RuntimeError("aria2c received an HTML page instead of file")
     job.status, job.progress, job.stage = "done", 100.0, ""
 
 
-def _direct_http(job: Job, out: Path):
-    req = urllib.request.Request(job.url, headers=_headers(job.opts))
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler(
-        {"http": job.proxy, "https": job.proxy} if job.proxy else {}))
-    with opener.open(req, timeout=30) as r:
-        name = None
-        cd = r.headers.get("Content-Disposition", "")
-        m = re.search(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)", cd)
-        if m:
-            name = urllib.parse.unquote(m.group(1))
-        name = sanitize_filename(name or job.title or "download")
-        dest = out / name
-        if dest.exists():
-            job.status, job.stage = "skipped", "already downloaded"
-            return
-        total = int(r.headers.get("Content-Length") or 0) or None
-        job.total = total
-        tmp = dest.with_suffix(dest.suffix + ".part")
-        t0, done = time.time(), 0
+def _cookiejar_from_file(cookie_file: str | None):
+    """Build an http.cookiejar.CookieJar from a Netscape file (including #HttpOnly_ entries)."""
+    import http.cookiejar
+
+    jar = http.cookiejar.CookieJar()
+    if not cookie_file:
+        return jar
+    for c in _parse_netscape_cookies(cookie_file):
+        dom = c["domain"]
+        jar.set_cookie(http.cookiejar.Cookie(
+            version=0,
+            name=c["name"],
+            value=c["value"],
+            port=None,
+            port_specified=False,
+            domain=dom,
+            domain_specified=True,
+            domain_initial_dot=dom.startswith("."),
+            path=c["path"],
+            path_specified=True,
+            secure=bool(c["secure"]),
+            expires=int(c["expires"]) if c.get("expires") else None,
+            discard=False,
+            comment=None,
+            comment_url=None,
+            rest={"HttpOnly": None} if c.get("httpOnly") else {},
+        ))
+    return jar
+
+
+def _has_file_ext(name: str) -> bool:
+    return bool(re.search(r"\.[a-z0-9]{1,8}$", Path(name).name, re.I))
+
+
+def _pick_download_name(raw_name: str, final_url: str, title: str, ctype: str) -> str:
+    url_tail = urllib.parse.unquote(urllib.parse.urlparse(final_url).path.rstrip("/").rsplit("/", 1)[-1])
+    name = (
+        raw_name
+        or (url_tail if _has_file_ext(url_tail) else "")
+        or (title if _has_file_ext(title) else "")
+        or title          # an opaque CDN id ("a3f9c0…") makes a worse name than the page's title
+        or url_tail
+        or "download"
+    )
+    base_ct = (ctype or "").split(";", 1)[0].strip().lower()
+    if not _has_file_ext(name) and base_ct and base_ct != "application/octet-stream":
+        ext = mimetypes.guess_extension(base_ct) or ""
+        if ext == ".jpe":
+            ext = ".jpg"
+        if ext:
+            name += ext
+    return _cap_filename(sanitize_filename(name))
+
+
+def _write_http_stream(
+    job: Job, out: Path, raw_name: str, total: int | None, ctype: str, chunks, *, final_url: str = ""
+) -> str | None:
+    """Stream chunks into a safe capped .part file and finalize; return a confirm URL to follow if GDrive interstitial."""
+    pre_buf = bytearray()
+    chunk_iter = iter(chunks)
+    if "text/html" in (ctype or "").lower():
+        for chunk in chunk_iter:
+            if not chunk:
+                continue
+            pre_buf.extend(chunk)
+            if len(pre_buf) > 512 * 1024:
+                break
+        if pre_buf:
+            confirm = extract_google_drive_confirm(pre_buf.decode("utf-8", "replace"), final_url or job.url)
+            if confirm:
+                return confirm
+        if job.opts.mode != "direct":
+            raise RuntimeError("Server returned an HTML page instead of media")
+
+    name = _pick_download_name(raw_name or job.opts.filename, final_url or job.url, job.title or "", ctype)
+    dest = out / name
+    if dest.exists():
+        job.status, job.stage = "skipped", "already downloaded"
+        return None
+    job.total = total
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    t0, done = time.time(), 0
+    try:
         with open(tmp, "wb") as f:
-            while True:
+            if pre_buf:
+                f.write(pre_buf)
+                done += len(pre_buf)
+                job.downloaded = done
+            for chunk in chunk_iter:
                 if job.cancel_event.is_set():
                     raise DownloadCancelled()
-                chunk = r.read(1 << 20)
                 if not chunk:
-                    break
+                    continue
                 f.write(chunk)
                 done += len(chunk)
                 job.downloaded = done
@@ -1832,9 +2525,95 @@ def _direct_http(job: Job, out: Path):
                 if total:
                     job.progress = done * 100.0 / total
                     job.eta = int((total - done) / job.speed) if job.speed else None
+        with open(tmp, "rb") as f:
+            ext = missing_media_ext(dest.name, f.read(512))   # a CDN link with no extension: name it by what it is
+        if ext:
+            dest = dest.with_name(f"{dest.name}.{ext}")
+            if dest.exists():
+                tmp.unlink(missing_ok=True)
+                job.status, job.stage = "skipped", "already downloaded"
+                return None
         tmp.rename(dest)
         job.files.append(str(dest))
-    job.status, job.progress, job.stage = "done", 100.0, ""
+        job.status, job.progress, job.stage = "done", 100.0, ""
+    except Exception:
+        if job.cancel_event.is_set() and not job.pause_requested:
+            tmp.unlink(missing_ok=True)
+        raise
+    return None
+
+
+def _direct_http(
+    job: Job,
+    out: Path,
+    *,
+    url: str | None = None,
+    cookie_file: str | None = None,
+    extra_headers: dict | None = None,
+):
+    fetch_url = url or job.url
+    hdrs = _headers(job.opts)
+    if extra_headers:
+        hdrs.update(extra_headers)
+    handlers = [
+        urllib.request.ProxyHandler({"http": job.proxy, "https": job.proxy} if job.proxy else {}),
+        urllib.request.HTTPCookieProcessor(_cookiejar_from_file(cookie_file)),
+    ]
+    opener = urllib.request.build_opener(*handlers)
+    try:
+        cur = fetch_url
+        for _ in range(2):
+            req = urllib.request.Request(cur, headers=hdrs)
+            with opener.open(req, timeout=30) as r:
+                raw_name = _filename_from_cd(r.headers.get("Content-Disposition", ""))
+                total = int(r.headers.get("Content-Length") or 0) or None
+                ctype = r.headers.get("Content-Type", "")
+                nxt = _write_http_stream(
+                    job, out, raw_name, total, ctype,
+                    iter(lambda: r.read(1 << 20), b""), final_url=r.geturl(),
+                )
+                if not nxt or nxt == cur:
+                    return
+                cur = nxt
+        raise RuntimeError("Server returned an HTML confirmation page instead of media")
+    except DownloadCancelled:
+        raise
+    except Exception as urllib_err:  # noqa: BLE001
+        if job.cancel_event.is_set() or (
+            isinstance(urllib_err, urllib.error.HTTPError) and urllib_err.code in (404, 410)
+        ):
+            raise
+        # Retry with Chrome TLS fingerprint for Cloudflare/bot-guarded direct files
+        from curl_cffi import requests as cf_requests
+
+        sess = cf_requests.Session(impersonate="chrome")
+        if cookie_file:
+            for c in _parse_netscape_cookies(cookie_file):
+                try:
+                    sess.cookies.set(c["name"], c["value"], domain=c["domain"], path=c["path"])
+                except Exception:  # noqa: BLE001
+                    pass
+        proxies = {"http": job.proxy, "https": job.proxy} if job.proxy else None
+        cur = fetch_url
+        for _ in range(2):
+            resp = sess.get(cur, headers=hdrs, timeout=30, stream=True, proxies=proxies, allow_redirects=True)
+            try:
+                if resp.status_code >= 400:
+                    raise RuntimeError(f"HTTP Error {resp.status_code}")
+                cd = resp.headers.get("Content-Disposition", "") or resp.headers.get("content-disposition", "")
+                raw_name = _filename_from_cd(cd)
+                total = int(resp.headers.get("Content-Length") or resp.headers.get("content-length") or 0) or None
+                ctype = resp.headers.get("Content-Type", "") or resp.headers.get("content-type", "")
+                nxt = _write_http_stream(job, out, raw_name, total, ctype, resp.iter_content(), final_url=resp.url)
+                if not nxt or nxt == cur:
+                    return
+                cur = nxt
+            finally:
+                try:
+                    resp.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        raise RuntimeError("Server returned an HTML confirmation page instead of media")
 
 
 # ---------------------------------------------------------------------------

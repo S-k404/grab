@@ -5,17 +5,25 @@ const MANIFEST_TYPES = [
   [/mpegurl/i, "HLS"], [/dash\+xml/i, "DASH"], [/vnd\.ms-sstr\+xml/i, "Smooth"], [/f4m/i, "HDS"],
 ];
 const MANIFEST_EXT = { m3u8: "HLS", mpd: "DASH", f4m: "HDS", ism: "Smooth" };
-const MEDIA_EXT = { mp4: "MP4", m4v: "MP4", webm: "WebM", mov: "MOV", mkv: "MKV", flv: "FLV", ogv: "OGG",
+const MEDIA_EXT = { mp4: "MP4", m4v: "MP4", webm: "WebM", mov: "MOV", mkv: "MKV", flv: "FLV", avi: "AVI", ogv: "OGG",
                     mp3: "MP3", m4a: "M4A", aac: "AAC", ogg: "OGG", opus: "Opus", wav: "WAV", flac: "FLAC" };
+const MIME_LABELS = {
+  MPEG: "MP3", "X-MATROSKA": "MKV", QUICKTIME: "MOV", "X-MSVIDEO": "AVI",
+  "X-FLV": "FLV", "X-M4A": "M4A", "MP4A-LATM": "AAC", "3GPP": "3GP",
+};
 const AUDIO_EXT = new Set(["mp3", "m4a", "aac", "ogg", "opus", "wav", "flac"]);
 // pieces of a stream, not something to download on its own
-const SEGMENT_RE = /\.(ts|m4s|cmfv|cmfa|m4f|vtt|webvtt|key)(\?|$)|[/_-](seg|segment|chunk|frag|fragment|part)[-_]?\d+|init\.(mp4|m4s)|\/range\/\d+-\d+|[?&](range|bytestart|byterange)=|\/QualityLevels\(/i;
+const SEGMENT_RE = /\.(ts|m4s|cmfv|cmfa|m4f|vtt|webvtt|key)(\?|$)|init\.(mp4|m4s)|\/range\/\d+-\d+|[?&](range|bytestart|byterange)=|\/QualityLevels\(/i;
+// "part2.mp4" is as likely to be a whole video as a piece of one: by its name alone, only a small or unsized file is a piece
+const SOFT_SEGMENT_RE = /[/_-](seg|segment|chunk|frag|fragment|part)[-_]?\d+/i;
+const MAX_SOFT_SEGMENT = 8 * 1024 * 1024;
 // sites Grab already understands from the page link (better titles, all qualities, audio merged)
 const NATIVE_HOSTS = /(^|\.)(googlevideo\.com|youtube\.com|ytimg\.com|ggpht\.com)$/i;
 // ad / tracking players whose clips nobody wants
 const AD_HOSTS = /(doubleclick\.net|googlesyndication\.com|imasdk\.googleapis\.com|adnxs\.com|moatads\.com|spotxchange\.com|springserve\.com|innovid\.com|teads\.tv|2mdn\.net)/i;
 
 const MIN_PROGRESSIVE = 400 * 1024;  // smaller video/audio files are previews, sprites or UI sounds
+const MIN_FETCHED = 2 * 1024 * 1024; // a file the page fetch()es rather than plays must be at least this big
 
 export function header(headers, name) {
   const h = (headers || []).find((x) => x.name.toLowerCase() === name);
@@ -48,23 +56,52 @@ export function classify({ url, type, statusCode, responseHeaders }) {
   try { host = new URL(url).hostname; } catch { return null; }
   if (NATIVE_HOSTS.test(host) || AD_HOSTS.test(host)) return null;
   const ctype = header(responseHeaders, "content-type").toLowerCase();
-  const ext = extOf(url);
+  const cd = header(responseHeaders, "content-disposition");
+  const cdExt = /filename\*?=(?:UTF-8'')?["']?[^"';]+\.([a-z0-9]{2,5})/i.exec(cd)?.[1]?.toLowerCase() || "";
+  const ext = extOf(url) || cdExt;
   const size = totalSize(responseHeaders);
 
   for (const [re, kind] of MANIFEST_TYPES) if (re.test(ctype)) return { kind, manifest: true, size, audio: false };
   if (MANIFEST_EXT[ext] && !/text\/html/.test(ctype)) return { kind: MANIFEST_EXT[ext], manifest: true, size, audio: false };
   if (/\/manifest(\(format=[^)]*\))?$/i.test(new URL(url).pathname) && /\.ism/i.test(url)) return { kind: "Smooth", manifest: true, size, audio: false };
 
-  if (SEGMENT_RE.test(url)) return null;
+  if (SEGMENT_RE.test(url) || (SOFT_SEGMENT_RE.test(url) && (size === null || size < MAX_SOFT_SEGMENT))) return null;
   const isMediaType = /^(video|audio)\//.test(ctype) && !/mp2t/.test(ctype);
-  const kind = MEDIA_EXT[ext] || (isMediaType ? ctype.split("/")[1].split(";")[0].toUpperCase().replace("MPEG", "MP3") : null);
-  if (!kind || (!isMediaType && !MEDIA_EXT[ext])) return null;
-  if (ctype && !isMediaType && !/octet-stream|binary/.test(ctype)) return null;   // e.g. an .mp4 URL that returned HTML
+  const rawSub = isMediaType ? ctype.split("/")[1].split(";")[0].trim().toUpperCase() : "";
+  // A <video>/<audio> tag asked for it but the server doesn't say what it is (signed CDN links, application/octet-stream):
+  // the browser is playing it, so it's media.
+  const unlabelled = type === "media" && !isMediaType && !MEDIA_EXT[ext] && (!ctype || /octet-stream|binary|^application\/(mp4|ogg|x-)/.test(ctype));
+  const kind = MEDIA_EXT[ext] || (isMediaType ? (MIME_LABELS[rawSub] || rawSub.replace(/^X-/, "")) : unlabelled ? "Video" : null);
+  if (!kind || (!isMediaType && !MEDIA_EXT[ext] && !unlabelled)) return null;
+  if (ctype && !isMediaType && !unlabelled && !/octet-stream|binary/.test(ctype)) return null;   // e.g. an .mp4 URL that returned HTML
   if (size !== null && size < MIN_PROGRESSIVE) return null;
   // <video src> requests are type "media"; players that fetch() whole files are fine too if big enough
-  if (type !== "media" && (size === null || size < 2 * 1024 * 1024)) return null;
+  if (type !== "media" && (size === null || size < MIN_FETCHED)) return null;
   const audio = ctype.startsWith("audio/") || (!ctype.startsWith("video/") && AUDIO_EXT.has(ext));
-  return { kind, manifest: false, size, audio };
+  // no media extension in the link itself: Grab must be told it's a plain file (yt-dlp can't tell what it is)
+  return { kind, manifest: false, size, audio, ...(MEDIA_EXT[extOf(url)] ? {} : { direct: true }) };
+}
+
+/**
+ * For a request classify() turned down but that looks like media: why, so the popup can list it ("show everything")
+ * for someone who knows it's their video. {why: "piece" | "small" | "fetched", kind, size, direct}, or null.
+ */
+export function explain({ url, type, statusCode, responseHeaders }) {
+  if (!/^https?:/i.test(url) || (statusCode && statusCode >= 400)) return null;
+  let host = "";
+  try { host = new URL(url).hostname; } catch { return null; }
+  if (NATIVE_HOSTS.test(host) || AD_HOSTS.test(host)) return null;
+  const ctype = header(responseHeaders, "content-type").toLowerCase();
+  const ext = extOf(url);
+  const size = totalSize(responseHeaders);
+  const mediaType = /^(video|audio)\//.test(ctype);
+  if (/html|json|javascript|css|^image\//.test(ctype) || !(mediaType || MEDIA_EXT[ext] || type === "media")) return null;
+  if (SEGMENT_RE.test(url) || /mp2t/.test(ctype) || (SOFT_SEGMENT_RE.test(url) && (size === null || size < MAX_SOFT_SEGMENT))) return { why: "piece", size };
+  const kind = MEDIA_EXT[ext] || (mediaType ? (MIME_LABELS[ctype.split("/")[1].split(";")[0].trim().toUpperCase()] || ctype.split("/")[1].split(";")[0].replace(/^x-/, "").toUpperCase()) : "Video");
+  const direct = !MEDIA_EXT[extOf(url)];
+  if (size !== null && size < MIN_PROGRESSIVE) return { why: "small", kind, size, direct };
+  if (type !== "media" && (size === null || size < MIN_FETCHED)) return { why: "fetched", kind, size, direct };
+  return null;
 }
 
 /** Parse an HLS playlist: master (variants with resolutions) or media (duration). */
@@ -92,7 +129,9 @@ export function parseHls(text, baseUrl) {
     } else if (line.startsWith("#EXTINF")) {
       duration += parseFloat(line.slice(8)) || 0;
       segments++;
-    } else if (/^#EXT-X-KEY:.*METHOD=(SAMPLE-AES|SAMPLE-AES-CTR)/i.test(line) || /KEYFORMAT="com\.(apple\.streamingkeydelivery|widevine|microsoft\.playready)/i.test(line)) {
+    } else if (/^#EXT-X-(?:SESSION-)?KEY:.*METHOD=(SAMPLE-AES(?:-CENC|-CTR)?)/i.test(line)
+               || /KEYFORMAT="com\.(apple\.streamingkeydelivery|widevine|microsoft\.playready)/i.test(line)
+               || /edef8ba9|9a04f079|94ce86fb/i.test(line)) {
       encrypted = true;  // DRM (FairPlay/Widevine/PlayReady): can't be downloaded
     }
   }
@@ -133,13 +172,19 @@ const VIDEO_PATHS = [
   ["Instagram", /^instagram\.com$/, /^\/([\w.]+\/)?(p|reels?|tv)\/[\w-]+/],
   ["TikTok", /^tiktok\.com$/, /^\/@[^/]+\/video\/\d+/],
   ["X", /^(x|twitter)\.com$/, /^\/\w+\/status\/\d+/],
-  ["Reddit", /^reddit\.com$/, /^\/r\/\w+\/comments\/\w+/],
-  ["Threads", /^threads\.(net|com)$/, /^\/@[\w.]+\/post\/[\w-]+/],
-  ["Facebook", /^facebook\.com$/, /^\/(reel\/\d+|[\w.]+\/videos\/[\w.-]+)/],
+  ["Reddit", /^reddit\.com$/, /^\/(?:r|u|user)\/[\w-]+\/comments\/\w+/],
+  ["Threads", /^threads\.(net|com)$/, /^\/(?:@[\w.]+\/post|post|t)\/[\w-]+/],
+  ["Bluesky", /^bsky\.app$/, /^\/profile\/[^/]+\/post\/[\w-]+/],
+  ["Facebook", /^facebook\.com$/, /^\/(reel\/\d+|share\/[rv]\/[\w-]+|[\w.]+\/videos\/[\w.-]+)/],
   ["Vimeo", /^vimeo\.com$/, /^\/\d+/],
   ["Dailymotion", /^dailymotion\.com$/, /^\/video\/\w+/],
   ["Twitch", /^twitch\.tv$/, /^\/(videos\/\d+|\w+\/clip\/[\w-]+)/],
   ["Twitch", /^clips\.twitch\.tv$/, /^\/[\w-]+/],
+  ["Kick", /^kick\.com$/, /^\/[^/]+\/videos\/[\w-]+/],
+  ["Rumble", /^rumble\.com$/, /^\/v[\w-]+-[^/]+\.html$/],
+  ["Bilibili", /^bilibili\.com$/, /^\/video\/(BV[\w]+|av\d+)/],
+  ["Streamable", /^streamable\.com$/, /^\/[\w-]+$/],
+  ["Loom", /^loom\.com$/, /^\/share\/[\w-]+/],
 ];
 
 /** The site's name and a clean link to the one video, if this page is a single video (else null). */
