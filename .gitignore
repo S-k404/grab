@@ -8,3 +8,6 @@ __pycache__/
 .pytest_cache/
 Grab.app/
 .DS_Store
+
+# Local AI session notes (kept on disk, not published)
+CONTEXT.md

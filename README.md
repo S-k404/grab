@@ -2,15 +2,16 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/banner-dark.svg">
-    <img src=".github/assets/banner-light.svg" alt="grab: A batch downloader for videos, image posts and files, with a CLI, a browser GUI, a Mac app and a stream-catching extension." width="100%">
+    <img src=".github/assets/banner-light.svg" alt="Grab: A batch downloader for videos, image posts and files, with a CLI, a browser GUI, a Mac app and a stream-catching extension." width="100%">
   </picture>
 </p>
 <!-- /datasheet:banner -->
 
-# grab
+# Grab
 
-A batch downloader for videos, image posts and files, with a command-line tool and a browser GUI.
-It does the jobs of Video DownloadHelper, JDownloader and image-downloader extensions.
+**Paste a link and the right engine takes it. If none can, a headless browser watches the page play.**
+
+A batch downloader for videos, image posts and files, with a command-line tool, a browser GUI, a native Mac app and a stream-catching browser extension. It does the jobs of Video DownloadHelper, JDownloader and image-downloader extensions.
 
 | What you paste | What handles it |
 |---|---|
@@ -18,6 +19,7 @@ It does the jobs of Video DownloadHelper, JDownloader and image-downloader exten
 | Raw stream links: `.m3u8` (HLS), `.mpd` (DASH), ISM, RTMP | **yt-dlp + ffmpeg** (fragments fetched 8 at a time) |
 | Image posts and galleries: Reddit, Twitter/X, Instagram, Imgur, Pixiv, DeviantArt, Flickr, Tumblr, boorus… | **gallery-dl** (automatic fallback when there's no video) |
 | Direct files: zip, iso, pdf, images, model files… | **aria2c** (16 connections per file; drops to 1 if the server refuses) |
+| Pages that only show video through JavaScript, embedded players, Threads posts, Google Drive, Dropbox and pixeldrain links | **Grab's page extractor**, with a headless Chromium-family browser as the last resort |
 
 How it gets speed:
 - Several downloads run at once (default 4, up to 32).
@@ -34,7 +36,37 @@ How it gets speed:
     <img src=".github/assets/diagram-light.svg" alt="Block diagram: paste a link, the right engine takes it" width="100%">
   </picture>
 </p>
+
+| Characteristic | Detail |
+| --- | --- |
+| **Video** | YouTube playlists and channels, Vimeo, Twitch VODs, TikTok, X and Reddit video, about 1800 sites via yt-dlp |
+| **Streams** | `.m3u8` (HLS), `.mpd` (DASH), ISM and RTMP via yt-dlp and ffmpeg, fragments fetched 8 at a time |
+| **Images** | Reddit, X, Instagram, Imgur, Pixiv, DeviantArt, Flickr, Tumblr and boorus via gallery-dl |
+| **Files** | Direct files via aria2c, 16 connections per file (drops to 1 if the server refuses) |
+| **Last resort** | A page extractor and a headless Chromium-family browser for pages yt-dlp and gallery-dl don't know; DRM streams are refused |
+| **Interfaces** | CLI, local browser GUI on `127.0.0.1:8765`, native Mac app and the Stream Catcher browser extension |
 <!-- /datasheet:figure -->
+
+## Quick start
+
+```bash
+./setup.sh                                        # ffmpeg, aria2, deno, uv, a .venv and the grab command
+grab "https://www.youtube.com/watch?v=VIDEO_ID"  # one video; playlists, galleries and files work the same way
+grab --gui                                        # or the browser GUI; ./build_app.sh --install builds the Mac app
+```
+
+## Typical application
+
+```bash
+# 1. A list of links overnight, eight at a time, inside a quiet window
+grab -f links.txt -j 8 --window 01:00-07:00
+
+# 2. A podcast or channel as MP3, kept up to date
+grab watch add https://example.com/podcast.rss --format mp3 --every 6
+
+# 3. A talk as audio, just the part you want
+grab -a --audio-format mp3 --clip 12:00-48:30 "https://www.youtube.com/watch?v=VIDEO_ID"
+```
 
 ## Setup
 
@@ -56,12 +88,15 @@ This builds **Grab.app**, a native window with a Dock icon, and copies it to `~/
 - **Presets:** one click picks the format: Best video, 1080p, 720p, MP3 or M4A audio, Images, or Direct file. Everything else is under *More options*.
 - **Copied links:** when you switch to Grab after copying a link, a banner offers to download it.
 - **Paste and download:** ⇧⌘V downloads whatever links are on your clipboard.
+- **Open the download folder:** ⌘O.
 - **Send to Grab:** drag the button from Settings (⌘,) to your browser's bookmarks bar. Clicking it on any page downloads that page straight away. The button carries Grab's private key; links without it (e.g. made by some website) only show a banner for you to confirm. If you added the button before this change, re-add it to get instant downloads.
 
 **Managing downloads**
 - **Rich list:** each download shows a thumbnail, duration, uploader and size. Playlists are grouped, with each video's progress underneath.
 - **Pause and resume:** pause any download (or all of them) and resume it later from where it stopped.
-- **History:** your download list is kept after you quit. Unfinished downloads come back paused, ready to resume.
+- **History:** your download list is kept after you quit. Unfinished downloads come back paused, ready to resume. Prefer a clean slate? Turn off *Remember finished and failed downloads between launches* in Settings → General, and only downloads still waiting come back.
+- **Queue order:** a waiting download has *Move to the front of the line* and *Move to the back of the line* buttons, so a link you need now doesn't sit behind a long batch. The list follows the real order.
+- **Export and import links:** *Export links* (above the list) saves the links in the tab you're looking at (All, Active, Done or Failed) as `grab-links-<view>-<time>.txt` in your download folder and shows it in Finder: one link per line, ready for `grab -f file.txt`. *Import…* (next to Analyze) puts the links from one or more text files into the box; dragging a file onto the window does the same. *Export links* on the Failed tab is the quickest way to retry a batch on another day.
 - **Find and filter:** search with ⌘F, and filter by All, Active, Done or Failed.
 - **Clear the list:** *Clear all* takes every finished and failed download off the list and out of the history. *Clear finished* (shown when there are failed ones too) keeps the failed ones so you can retry them. Your files always stay in the folder.
 - **Per-download actions:** Open, Show in Finder, Copy link, Retry or Remove.
@@ -98,7 +133,43 @@ grab -r https://site.com/page "https://cdn.site.com/master.m3u8"   # raw stream 
 grab --help
 ```
 
+Every option:
+
+| Option | Meaning |
+|---|---|
+| `-f, --file FILE` | a text file with one link per line (`-` reads stdin) |
+| `-o, --out DIR` | output folder (default `~/Downloads/grab`) |
+| `--flat` | save everything directly in the output folder, no per-site subfolders |
+| `-j, --jobs N` | downloads at the same time (default 4) |
+| `-m, --mode auto\|video\|audio\|images\|direct` | `auto` tries video, then images, then a direct file |
+| `-a, --audio`, `--audio-format m4a\|mp3\|opus\|flac\|wav` | audio only, and which format |
+| `-q, --quality best\|2160\|1440\|1080\|720\|480\|360` | cap the video height |
+| `--container mp4\|mkv\|webm` | the output container |
+| `--subs`, `--sub-langs en,es` | embed English subtitles, or the languages you name (`all` for every language) |
+| `--clip FROM-TO` | only that part, e.g. `1:20-2:45`, or `90-` for "to the end" |
+| `--original` | keep AV1/VP9 instead of converting to compatible H.264/HEVC |
+| `--no-sponsorblock` | don't cut YouTube sponsor segments |
+| `-c, --cookies BROWSER`, `--cookies-file FILE` | use a browser's logins, or a Netscape `cookies.txt` |
+| `-r, --referer URL`, `-H, --header "Name: value"` | send a Referer or extra headers (repeatable) |
+| `--fragments N`, `--conns N` | HLS/DASH fragments in parallel (default 8), aria2c connections per file (default 16) |
+| `--no-aria2`, `--aria2-streams` | don't use aria2c, or use it for plain-HTTP video streams too |
+| `--limit-rate`, `--total-limit`, `--window HH:MM-HH:MM` | a cap per download, a cap for all together, and a time window (see Schedule and speed limits) |
+| `--no-archive`, `--no-smart`, `--no-expand` | re-download things you already have, switch off the auto-fix, keep playlists inside one job |
+| `-i, --items 1-20` | only these playlist or gallery items |
+| `--gui`, `--doctor`, `--update`, `--nightly`, `--version` | open the browser GUI, check the install, update the engines (nightly builds), print the version |
+
 Files go to `~/Downloads/grab/<Site>/…` (change it with `-o`). Things you've already downloaded are skipped, tracked in `.grab-archive.txt` and `.grab-gallery.sqlite3`; `--no-archive` turns that off. Interrupted direct downloads resume.
+
+## Pages Grab doesn't know
+
+When yt-dlp and gallery-dl both say "Unsupported URL", and the link isn't a plain file, Grab doesn't give up:
+
+1. **The page extractor** reads the page: video and audio tags, embedded players, linked files, Threads posts, and share links for Google Drive, Dropbox and pixeldrain (turned into direct downloads).
+2. **A headless browser** (any Chromium-family browser installed in the usual place: Brave, Chrome, Chromium, Edge, Vivaldi or Helium) opens the page, lets its JavaScript run, presses play, and watches what the page loads: HLS and DASH playlists, video files and the finished page. Two of these browsers run at most at the same time.
+
+Whatever it finds is downloaded like any other link. Set `GRAB_NO_HEADLESS=1` to switch the browser step off; the page extractor still runs.
+
+Encrypted streams (DRM) are recognised and refused with a clear message: Grab does not decrypt them.
 
 ## Quality, Analyze, clips and extras
 
@@ -137,10 +208,13 @@ From the command line (these use the app's list when Grab is open):
 grab watch add https://www.youtube.com/@NASA --every 6
 grab watch add https://bsky.app/profile/nasa.gov --latest 10 --videos
 grab watch add https://example.com/podcast.rss --format mp3 --all
+grab watch add https://bsky.app/profile/nasa.gov --photos --only-new --cookies chrome --name "NASA photos"
 grab watch list
 grab watch run
 grab watch remove "@NASA (YouTube)"
 ```
+
+`--photos` and `--videos` limit what is fetched, `--only-new` (the default) skips what exists today, `--cookies BROWSER` takes that site's login from a browser, and `--name` labels the source.
 
 `grab watch run` checks everything now. Add `--due` to check only the sources whose time has come, which is handy for a scheduled job.
 
@@ -156,6 +230,8 @@ Use this for sites with no download button and that yt-dlp doesn't know. It does
 **Use it** (with Grab running, clicking Download starts straight away; if Grab is closed, it opens and starts too):
 - **Popup:** play the video, then click the icon. You get "Download this page" plus the list of found streams, with resolution and length. If Grab knows the site (YouTube, Reddit, X…), the popup says so, and downloading the page is the better choice there.
 - **Right-click:** on any video, link, image or page, choose **Download … with Grab**.
+- **A video that plays but isn't listed?** The popup lists what a page plays: HLS/DASH playlists and video files, including signed CDN links that have no file extension and files named like `part1.mp4`. It keeps a short note of everything else that looked like media and was left out. Click **Not seeing your video? Show everything else the page loaded** to see each one with the reason (for example *under 400 KB: usually a preview*), and Copy or Download it yourself. Pieces of a stream (hundreds of `.ts` or `.m4s` bits) are only counted, because none works alone: use the stream in the list, or *Download this page*. Grab names an extension-less download after the page and gives it the right ending (`.mp4`, `.webm`, `.mp3`…) by looking inside the file.
+- **Keyboard shortcut:** **Option+Shift+G** (Alt+Shift+G elsewhere) does what *Download this page* does, without opening the popup. The icon shows ✓ when Grab has it. Change the keys at `chrome://extensions/shortcuts` (Brave: `brave://extensions/shortcuts`).
 - **If Grab isn't running,** the extension opens it through a `grab://` link and the stream appears in a banner.
 
 **Everything on page:** the button next to *Download this page* lists every picture and video on the page as thumbnails, for any site.
@@ -208,21 +284,9 @@ Sites change often, and yt-dlp and gallery-dl ship fixes within days, so Grab up
 - **Settings → Updates:** shows your versions and when Grab last checked. You can switch to the **Nightly** channel for yt-dlp's newest fixes, or turn automatic updates off.
 - **Command line:** `grab --update` (add `--nightly` for nightly builds). `./setup.sh` does the same for the command line and the app together. The Homebrew tools (ffmpeg, aria2, deno) update with `brew upgrade`.
 
-## Auto-fix: switching strategies on errors
+## Troubleshooting
 
-When a download fails, Grab reads the error and retries with a strategy that fits it:
-
-| Error | What Grab tries, in order |
-|---|---|
-| Rate limit (429), 403, timeouts, dropped connections | fewer connections (2 fragments, small chunks, slower requests) → another YouTube player (YouTube only) → switch between the built-in downloader and aria2c → simpler format |
-| Merge or format errors | simpler single-file format → another YouTube player |
-| Direct files | 16 connections → 1 connection → plain HTTP |
-| Image galleries hitting rate limits | slower requests with pauses between them |
-| Login required, or page not found | no retries; you get a tip instead |
-
-Whatever worked is remembered per site and used first next time. If it stops working there, Grab goes back to normal settings. Downloads that needed a fix show an **auto-fixed** badge. Settings lists what Grab has learned and lets you forget it. You can turn this off under *More options → Auto-fix failed downloads*, or with `--no-smart` on the command line.
-
-## Checking that it works
+### Checking that it works
 
 **Quick health check.** This confirms the tools are installed, the versions are current, the download folder is writable with enough space, and YouTube works right now. It's also in the app under Settings → Engine → **Run self-check**.
 
@@ -242,7 +306,7 @@ grab --doctor
 .venv/bin/python -m pytest
 ```
 
-The suite also tests the browser extension end to end: a headless Helium/Chromium loads it, plays a test page, and the test checks what it detects, its popup, and that Grab downloads what it sends. It also checks auto-download: off by default, waiting while Grab is closed, and never downloading the same video twice. It needs Node and a Chromium browser.
+The suite also covers the page extractor, the download queue order and the GUI page (`test_extract.py`, `test_queue.py`, `test_ui.py`), and tests the browser extension end to end: a headless Helium/Chromium loads it, plays a test page, and the test checks what it detects, its popup, and that Grab downloads what it sends. It also checks auto-download: off by default, waiting while Grab is closed, and never downloading the same video twice. It needs Node and a Chromium browser.
 
 Add `--online` to also test real sites: a YouTube video, a channel split into parallel jobs, YouTube audio, a Flickr gallery, the update server, and the extension on a real third-party video player.
 
@@ -252,15 +316,58 @@ Add `--online` to also test real sites: a YouTube video, a channel split into pa
 
 If an online test fails, the site has probably changed. Run `grab --update` and try again.
 
-## When something fails
+### When something fails
 
 - **"login required" / "blocked" / "Unavailable"** (Reddit, X, Instagram, age-restricted YouTube): choose your browser under *Use login cookies from* (CLI: `-c chrome`). You must be logged in to the site in that browser. Safari cookies need Full Disk Access for Terminal.
-- **"Unsupported URL" on some random site:** open the page and play the video. In DevTools > Network, filter `m3u8`, `mpd` or `mp4` and copy the request URL. Paste that URL, with the page URL as Referer. This is what Video DownloadHelper does under the hood.
+- **"Unsupported URL" on some random site:** Grab already tried its page extractor and a headless browser (see "Pages Grab doesn't know"; they need a Chromium-family browser). If the video still isn't found, open the page and play the video. In DevTools > Network, filter `m3u8`, `mpd` or `mp4` and copy the request URL. Paste that URL, with the page URL as Referer. This is what Video DownloadHelper does under the hood.
 - **429 / Too Many Requests:** lower parallel downloads and retry later.
 - **DRM streams** (Netflix, Prime Video, Disney+, Spotify…) are not supported.
 
 Only download content you have the right to download.
 
+### Auto-fix: switching strategies on errors
+
+When a download fails, Grab reads the error and retries with a strategy that fits it:
+
+| Error | What Grab tries, in order |
+|---|---|
+| Rate limit (429), 403, timeouts, dropped connections | fewer connections (2 fragments, small chunks, slower requests) → another YouTube player (YouTube only) → switch between the built-in downloader and aria2c → simpler format |
+| Merge or format errors | simpler single-file format → another YouTube player |
+| Direct files | 16 connections → 1 connection → plain HTTP |
+| Image galleries hitting rate limits | slower requests with pauses between them |
+| Login required, or page not found | no retries; you get a tip instead |
+
+Whatever worked is remembered per site and used first next time. If it stops working there, Grab goes back to normal settings. Downloads that needed a fix show an **auto-fixed** badge. Settings lists what Grab has learned and lets you forget it. You can turn this off under *More options → Auto-fix failed downloads*, or with `--no-smart` on the command line.
+
+## Absolute maximum ratings
+
+| Parameter | Limit |
+|---|---|
+| Parallel downloads | 4 by default, up to 32 |
+| aria2c connections per file | 16, dropping to 1 if the server refuses |
+| HLS/DASH fragments in parallel | 8 by default |
+| Headless browsers at once | 2 |
+| Polite mode (Instagram, X, TikTok, Facebook, Reddit, Threads) | one download at a time per site, with a random 4 to 12 s gap |
+| Engine update check | at launch and every 6 hours |
+| DRM streams decrypted | 0 |
+
+## Errata
+
+* DRM-protected streams (Netflix, Prime Video, Disney+, Spotify and the like) are not supported: Grab recognises them and says so, but does not try to decrypt them.
+* Instagram and X show profiles only to logged-in users, and Reddit may block logged-out access from some networks; see "Needs you logged in".
+* Helium's logins cannot be read; Zen's can. Safari needs Full Disk Access.
+* The headless-browser step needs a Chromium-family browser installed in the usual place (an app in `/Applications` on macOS).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+<!-- datasheet:footer -->
+---
+
+<p align="center">
+  <a href="https://github.com/S-k404/odysseus-image-tools">&larr; U8 odysseus-image-tools</a> &middot;
+  <a href="https://github.com/S-k404/S-k404">SK-404 index</a> &middot;
+  <a href="https://github.com/S-k404/flight-live">U11 flight-live &rarr;</a>
+</p>
+<!-- /datasheet:footer -->
