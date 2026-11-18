@@ -368,6 +368,6 @@ MIT. See [LICENSE](LICENSE).
 <p align="center">
   <a href="https://github.com/S-k404/odysseus-image-tools">&larr; U8 odysseus-image-tools</a> &middot;
   <a href="https://github.com/S-k404/S-k404">SK-404 index</a> &middot;
-  <a href="https://github.com/S-k404/flight-live">U11 flight-live &rarr;</a>
+  <a href="https://github.com/S-k404/aether-7">U10 aether-7 &rarr;</a>
 </p>
 <!-- /datasheet:footer -->
