@@ -54,7 +54,12 @@ def latest(pkg: str, nightly: bool = False) -> str:
 
 def find_uv() -> str | None:
     home = Path.home()
-    for p in (shutil.which("uv"), home / ".local/bin/uv", "/opt/homebrew/bin/uv", "/usr/local/bin/uv", home / ".cargo/bin/uv"):
+    candidates = (
+        (shutil.which("uv"), home / ".local/bin/uv.exe", home / ".cargo/bin/uv.exe")
+        if sys.platform.startswith("win")
+        else (shutil.which("uv"), home / ".local/bin/uv", "/opt/homebrew/bin/uv", "/usr/local/bin/uv", home / ".cargo/bin/uv")
+    )
+    for p in candidates:
         if p and os.access(str(p), os.X_OK):
             return str(p)
     return None

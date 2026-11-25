@@ -32,8 +32,14 @@ from grab.core import Manager, Options
 def _never_touch_the_real_grab_folder(tmp_path_factory):
     """Tests get their own Grab folder; fail loudly if anything writes to the real one."""
     import os
+    import sys
+    if sys.platform == "darwin":
+        real = Path.home() / "Library/Application Support/Grab"
+    elif sys.platform.startswith("win"):
+        real = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")) / "Grab"
+    else:
+        real = Path.home() / ".config" / "grab"
     os.environ["GRAB_STATE_DIR"] = str(tmp_path_factory.mktemp("grab-state"))
-    real = Path.home() / "Library/Application Support/Grab"
     before = {p: p.stat().st_mtime for p in real.rglob("*") if p.is_file() and "runtime" not in p.parts} if real.exists() else {}
     yield
     after = {p: p.stat().st_mtime for p in real.rglob("*") if p.is_file() and "runtime" not in p.parts} if real.exists() else {}

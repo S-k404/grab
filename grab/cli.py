@@ -172,7 +172,27 @@ class Display:
         sys.stdout.flush()
 
 
+def _enable_win_console():
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+    except Exception:
+        pass
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def main(argv=None):
+    _enable_win_console()
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["watch"]:
         from .watch import cli as watch_cli

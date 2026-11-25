@@ -44,15 +44,25 @@ How it gets speed:
 | **Images** | Reddit, X, Instagram, Imgur, Pixiv, DeviantArt, Flickr, Tumblr and boorus via gallery-dl |
 | **Files** | Direct files via aria2c, 16 connections per file (drops to 1 if the server refuses) |
 | **Last resort** | A page extractor and a headless Chromium-family browser for pages yt-dlp and gallery-dl don't know; DRM streams are refused |
-| **Interfaces** | CLI, local browser GUI on `127.0.0.1:8765`, native Mac app and the Stream Catcher browser extension |
+| **Interfaces** | CLI, local browser GUI on `127.0.0.1:8765`, native Mac app, Windows 11 PowerShell setup and the Stream Catcher browser extension |
 <!-- /datasheet:figure -->
 
 ## Quick start
+
+macOS / Linux:
 
 ```bash
 ./setup.sh                                        # ffmpeg, aria2, deno, uv, a .venv and the grab command
 grab "https://www.youtube.com/watch?v=VIDEO_ID"  # one video; playlists, galleries and files work the same way
 grab --gui                                        # or the browser GUI; ./build_app.sh --install builds the Mac app
+```
+
+Windows 11 (PowerShell):
+
+```powershell
+.\setup.ps1                                       # winget (ffmpeg, aria2, deno, uv) + .venv + grab.cmd / grab-gui.cmd
+grab "https://www.youtube.com/watch?v=VIDEO_ID"
+.\Grab` GUI.ps1                                   # or: grab --gui
 ```
 
 ## Typical application

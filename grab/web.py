@@ -465,9 +465,14 @@ def main(argv=None):
         State.mgr.save()
         srv.server_close()
         sys.stdout.flush()
-        os.execv(sys.executable, [sys.executable, "-m", "grab.web", "--no-browser", "--port", str(srv.server_address[1]),
-                                  "--jobs", str(a.jobs), "--out", a.out, "--state-dir", a.state_dir]
-                 + (["--exit-with-parent"] if a.exit_with_parent else []))
+        cmd = [sys.executable, "-m", "grab.web", "--no-browser", "--port", str(srv.server_address[1]),
+               "--jobs", str(a.jobs), "--out", a.out, "--state-dir", a.state_dir]
+        if a.exit_with_parent:
+            cmd.append("--exit-with-parent")
+        if sys.platform.startswith("win"):
+            subprocess.Popen(cmd)
+            os._exit(0)
+        os.execv(sys.executable, cmd)
 
     State.scheduler = Scheduler(State.mgr, State.prefs).start()
     State.watcher = Watcher(State.mgr, sd / "watch.json", State.base_options).start()
@@ -486,6 +491,10 @@ def main(argv=None):
         def watch_parent():
             while os.getppid() == parent:
                 time.sleep(2)
+            if sys.platform.startswith("win"):
+                State.mgr.pause()
+                State.mgr.save()
+                os._exit(0)
             os.kill(os.getpid(), signal.SIGTERM)
         threading.Thread(target=watch_parent, daemon=True).start()
     url = f"http://127.0.0.1:{srv.server_address[1]}/"

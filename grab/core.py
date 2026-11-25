@@ -91,6 +91,9 @@ def state_dir() -> Path:
         return Path(os.environ["GRAB_STATE_DIR"]).expanduser()
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "Grab"
+    if sys.platform.startswith("win"):
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        return (Path(base) if base else Path.home() / "AppData" / "Local") / "Grab"
     return Path.home() / ".config" / "grab"
 
 
@@ -233,6 +236,8 @@ FULL_DISK_ACCESS = ("open System Settings → Privacy & Security → Full Disk A
 
 def browser_data_blocked(browser: str) -> bool:
     """Is macOS keeping Grab out of this browser's data folder (privacy protection)?"""
+    if sys.platform != "darwin":
+        return False
     d = BROWSER_DATA.get(browser)
     if not d:
         return False
@@ -249,6 +254,15 @@ def browser_data_blocked(browser: str) -> bool:
 def cookie_problem(msg: str) -> str:
     """Explain a failure to *read* the chosen browser's cookies (macOS permissions etc.), or ''."""
     m = (msg or "").lower()
+    if sys.platform.startswith("win") and (
+        "app-bound" in m
+        or "dpapi" in m
+        or "decrypt" in m
+        or ("could not copy" in m and "cookie" in m)
+        or ("permission" in m and "cookie" in m)
+    ):
+        return ("Windows browsers lock cookies while open or use App-Bound Encryption. Close that browser and retry, "
+                "or click 'Share logins' in the Grab browser extension.")
     if "safari" in m and ("operation not permitted" in m or "permission" in m or "binarycookies" in m):
         return ("Safari keeps its cookies private: open System Settings → Privacy & Security → Full Disk Access and turn on "
                 "Grab (and Terminal, for the command line), or pick another browser you're logged in with.")
@@ -281,9 +295,12 @@ USER_AGENT = (
 
 def _bin(name: str) -> str | None:
     """Find a tool next to the running interpreter first (the venv), then on PATH."""
-    local = Path(sys.executable).parent / name
-    if local.exists():
-        return str(local)
+    parent = Path(sys.executable).parent
+    candidates = [f"{name}.exe", f"{name}.cmd", name] if sys.platform.startswith("win") else [name]
+    for cand in candidates:
+        local = parent / cand
+        if local.exists():
+            return str(local)
     return shutil.which(name)
 
 

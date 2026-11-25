@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -29,17 +30,25 @@ def _check(name, fn):
 
 
 def _tool(path, label, why):
+    setup_cmd = ".\\setup.ps1" if sys.platform.startswith("win") else "./setup.sh"
+
     def fn():
         if not path:
-            return False, f"not found - {why}. Run ./setup.sh"
+            return False, f"not found - {why}. Run {setup_cmd}"
         return True, path
     return fn
 
 
 def _deno():
-    exe = shutil.which("deno") or next((p for p in ("/opt/homebrew/bin/deno", "/usr/local/bin/deno") if os.path.exists(p)), None)
+    candidates = (
+        [str(Path.home() / ".deno" / "bin" / "deno.exe")]
+        if sys.platform.startswith("win")
+        else ["/opt/homebrew/bin/deno", "/usr/local/bin/deno"]
+    )
+    exe = shutil.which("deno") or next((p for p in candidates if os.path.exists(p)), None)
     if not exe:
-        return False, "not found - some YouTube videos need it. Run: brew install deno"
+        hint = "winget install DenoLand.Deno" if sys.platform.startswith("win") else "brew install deno"
+        return False, f"not found - some YouTube videos need it. Run: {hint}"
     v = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10).stdout.split("\n")[0]
     return True, v
 
