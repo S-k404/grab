@@ -80,13 +80,27 @@ grab -a --audio-format mp3 --clip 12:00-48:30 "https://www.youtube.com/watch?v=V
 
 ## Setup
 
+**macOS / Linux:**
+
 ```bash
 ./setup.sh
 ```
 
-The script installs ffmpeg, aria2, deno (YouTube needs a JS runtime) and uv through Homebrew. It then creates `.venv` and links `grab` and `grab-gui` into `~/.local/bin`. **Re-run it whenever a site stops working**: sites change often, and yt-dlp and gallery-dl usually ship fixes within days.
+The script installs ffmpeg, aria2, deno (YouTube needs a JS runtime) and uv through Homebrew. It then creates `.venv` and links `grab` and `grab-gui` into `~/.local/bin`.
+
+**Windows 11 (PowerShell):**
+
+```powershell
+.\setup.ps1
+```
+
+The script installs ffmpeg (`Gyan.FFmpeg`), aria2 (`aria2.aria2`), deno (`DenoLand.Deno`) and uv (`astral-sh.uv`) via `winget`. It then sets up `.venv` and generates `grab.cmd` and `grab-gui.cmd` shims in `~/.local/bin` (adding the folder to your user PATH).
+
+**Re-run the setup script whenever a site stops working**: sites change often, and yt-dlp and gallery-dl usually ship fixes within days.
 
 ## Mac app
+
+*(macOS only. On Windows 11, use the Browser GUI via `.\Grab GUI.ps1` or `grab-gui`, or the CLI via `grab`.)*
 
 ```bash
 ./build_app.sh --install
@@ -123,9 +137,12 @@ The app runs its own copy of the engine in `~/Library/Application Support/Grab/r
 
 ## Browser GUI
 
-Double-click **`Grab GUI.command`**, or run `grab-gui`. It opens `http://127.0.0.1:8765` in your browser. The server only listens on your own machine.
+**macOS:** Double-click **`Grab GUI.command`**, or run `grab-gui`.  
+**Windows 11:** Right-click **`Grab GUI.ps1`** → Run with PowerShell, or run `grab-gui` from PowerShell / Windows Terminal.
 
-Paste links (one per line, or drop a `.txt` file) and press **Download** (⌘↵). Each job shows live progress, speed and ETA, plus Cancel, Retry and Show in Finder buttons.
+It opens `http://127.0.0.1:8765` in your browser. The server only listens on your own machine.
+
+Paste links (one per line, or drop a `.txt` file) and press **Download** (⌘↵ on Mac, Ctrl+Enter on Windows). Each job shows live progress, speed and ETA, plus Cancel, Retry and Show in Folder buttons.
 
 ## CLI
 
@@ -183,7 +200,7 @@ Encrypted streams (DRM) are recognised and refused with a clear message: Grab do
 
 ## Quality, Analyze, clips and extras
 
-- **Best quality, compatible format (default):** Grab picks the highest resolution available. At 1080p and below that's H.264, so no conversion. When a site only offers higher resolutions as AV1/VP9 (YouTube at 1440p/4K/8K), Grab converts to **HEVC MP4** with the Mac's hardware encoder. HDR, audio, chapters, subtitles and the cover image are kept, and the result plays everywhere on Apple devices and in DaVinci Resolve. Turn it off under *More options → Video format → Original* (CLI: `--original`) for smaller AV1/VP9 files.
+- **Best quality, compatible format (default):** Grab picks the highest resolution available. At 1080p and below that's H.264, so no conversion. When a site only offers higher resolutions as AV1/VP9 (YouTube at 1440p/4K/8K), Grab converts to **HEVC MP4** with hardware acceleration (Apple Silicon VideoToolbox on macOS; NVENC, QSV, or AMF on Windows). HDR, audio, chapters, subtitles and the cover image are kept, and the result plays everywhere. Turn it off under *More options → Video format → Original* (CLI: `--original`) for smaller AV1/VP9 files.
 - **Analyze:** paste one link and press **Analyze** to see every quality with its codec and estimated size, which ones get converted, and audio-only options. You can also set a clip range, subtitles, sponsor removal, chapters and cover image just for that link.
 - **Only part of a video:** *More options → Only part* (or in Analyze), e.g. `1:20` to `2:45`, or a start with no end. Grab downloads only that section, cut exactly. On the command line: `grab --clip 1:20-2:45 URL`.
 - **YouTube extras** (defaults under *More options*):
@@ -292,7 +309,7 @@ Sites change often, and yt-dlp and gallery-dl ship fixes within days, so Grab up
 - **Safe install:** a new version installs only while nothing is downloading. Grab then restarts its engine in a second or two. Waiting downloads continue, and you see an "Updated yt-dlp to …" notice.
 - **Errors trigger it:** errors that usually mean yt-dlp is out of date ("Unable to extract…", "please report this issue", signature errors) start a check right away. Those downloads are retried once the update is in.
 - **Settings → Updates:** shows your versions and when Grab last checked. You can switch to the **Nightly** channel for yt-dlp's newest fixes, or turn automatic updates off.
-- **Command line:** `grab --update` (add `--nightly` for nightly builds). `./setup.sh` does the same for the command line and the app together. The Homebrew tools (ffmpeg, aria2, deno) update with `brew upgrade`.
+- **Command line:** `grab --update` (add `--nightly` for nightly builds). `./setup.sh` (macOS/Linux) or `.\setup.ps1` (Windows 11) updates the engine. System tools update with `brew upgrade` on macOS or `winget upgrade Gyan.FFmpeg aria2.aria2 DenoLand.Deno astral-sh.uv` on Windows.
 
 ## Troubleshooting
 
